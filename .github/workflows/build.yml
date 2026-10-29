@@ -68,6 +68,35 @@ jobs:
             echo "Using custom LiveArea banner: $CUSTOM_BANNER_PATH"
           fi
 
+      - name: Install PNG quantizer
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pngquant
+          pngquant --version
+
+      - name: Convert and validate Vita LiveArea PNGs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          quantize_vita_png() {
+            local file="$1"
+            local width="$2"
+            local height="$3"
+            local max_bytes="$4"
+            local indexed="${file%.png}.indexed.png"
+
+            # Vita's installer expects LiveArea graphics to be quantized PNGs.
+            pngquant --force --strip --quality=0-100 --speed 1 \
+              --output "$indexed" 256 "$file"
+            mv "$indexed" "$file"
+            python3 tools/validate_vita_png.py "$file" "$width" "$height" "$max_bytes"
+          }
+
+          quantize_vita_png assets/branding/icon0.png 128 128 131072
+          quantize_vita_png assets/branding/livearea/bg.png 840 500 131072
+          quantize_vita_png assets/branding/livearea/startup.png 280 158 65536
+
       - name: Check Blender add-on syntax
         run: python3 -m py_compile blender_addon/vlender_bridge.py
 
