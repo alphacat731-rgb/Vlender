@@ -15,6 +15,7 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - Switch the viewport between textured display and a neutral solid-shaded mode; toggle a real triangle-edge wireframe overlay independently from the skeleton.
 - Load and save ```.vlpose``` files; malformed pose files are rejected without partially changing the current pose.
 - Undo/redo the last 24 bone-transform edits using the top-bar curved-arrow buttons. History follows the bone that was edited, even after selection changes.
+- Copy a selected bone's full location/rotation/scale transform and paste it onto another bone while in Pose mode; clipboard clears when a different project is loaded.
 - Failed or malformed project loads preserve the currently loaded model; project parsing rejects non-finite values, invalid weights, incomplete triangles, duplicate bone names, and cyclic/out-of-range bone hierarchies.
 - Generate an app icon and LiveArea art, with GitHub Actions inputs to choose custom PNG files and the displayed app name.
 - Use an offline set of built-in Material-style vector icons for the toolbar and action buttons; no online font fetch is required.
