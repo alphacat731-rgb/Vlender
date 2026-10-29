@@ -883,11 +883,15 @@ static void insert_timeline_keyframe(void) {
         snprintf(g_status,sizeof(g_status),"%s","ENTER POSE MODE TO INSERT A KEYFRAME");
         return;
     }
+    g_playing = 0;
+    g_play_tick = 0;
     capture_animation_frame(g_frame);
     snprintf(g_status,sizeof(g_status),"INSERTED KEYFRAME AT %02d",g_frame);
 }
 
 static void delete_timeline_keyframe(void) {
+    g_playing = 0;
+    g_play_tick = 0;
     if (g_frame < 1 || g_frame > VLENDER_TIMELINE_FRAMES ||
         !g_animation[g_frame - 1].valid) {
         snprintf(g_status,sizeof(g_status),"%s","NO KEYFRAME AT CURRENT FRAME");
