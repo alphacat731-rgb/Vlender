@@ -25,6 +25,9 @@
 #define PATH_TEXTURE "ux0:data/VLENDER/texture.bmp"
 #define PATH_POSE_IN "ux0:data/VLENDER/input.vlpose"
 #define PATH_POSE_OUT "ux0:data/VLENDER/output.vlpose"
+#define PATH_ANIM_IN "ux0:data/VLENDER/input.vlanim"
+#define PATH_ANIM_OUT "ux0:data/VLENDER/output.vlanim"
+#define VLENDER_TIMELINE_FRAMES 80
 
 typedef struct { float x, y, z; } Vec3;
 
@@ -54,6 +57,8 @@ static float g_camera_elevation = -62.0f;
 static float g_camera_distance = 5.0f;
 static char g_status[128] = "EXPORT A MODEL FROM BLENDER TO ux0:data/VLENDER/";
 static int g_frame = 1;
+static int g_playing = 0;
+static int g_play_tick = 0;
 static int g_open_menu = 0; /* 0 closed, 1 File, 2 Edit, 3 Render, 4 Window, 5 Help */
 static int g_has_transform_clipboard = 0;
 static float g_clipboard_location[3];
@@ -67,6 +72,12 @@ typedef struct {
     float rotation[3];
     float scale[3];
 } PoseSnapshot;
+
+typedef struct {
+    int valid;
+    float trs[VLENDER_MAX_BONES][9]; /* rotation XYZ, location XYZ, scale XYZ */
+} VLAnimationFrame;
+static VLAnimationFrame g_animation[VLENDER_TIMELINE_FRAMES];
 
 static PoseSnapshot g_undo_history[POSE_HISTORY_CAPACITY];
 static PoseSnapshot g_redo_history[POSE_HISTORY_CAPACITY];
@@ -248,7 +259,8 @@ enum {
     ICON_LAYOUT, ICON_POSE, ICON_OBJECT, ICON_OPEN,
     ICON_LOAD, ICON_SAVE, ICON_MODE, ICON_MINUS,
     ICON_PLUS, ICON_RESET, ICON_FIT, ICON_GRID, ICON_BONES,
-    ICON_UNDO, ICON_REDO, ICON_TEXTURE, ICON_WIREFRAME, ICON_COPY, ICON_PASTE
+    ICON_UNDO, ICON_REDO, ICON_TEXTURE, ICON_WIREFRAME, ICON_COPY, ICON_PASTE,
+    ICON_KEYFRAME, ICON_PLAY, ICON_STOP, ICON_PREV, ICON_NEXT
 };
 
 static void icon_line(float ox, float oy, float s,
@@ -468,6 +480,30 @@ static void draw_icon2d(int icon, float x, float y, float size,
             icon_line(x,y,s,8,12,16,12,r,g,b);
             icon_line(x,y,s,8,16,16,16,r,g,b);
             break;
+        case ICON_KEYFRAME:
+            icon_line(x,y,s,12,3,21,12,r,g,b);
+            icon_line(x,y,s,21,12,12,21,r,g,b);
+            icon_line(x,y,s,12,21,3,12,r,g,b);
+            icon_line(x,y,s,3,12,12,3,r,g,b);
+            break;
+        case ICON_PLAY:
+            icon_line(x,y,s,7,4,19,12,r,g,b);
+            icon_line(x,y,s,19,12,7,20,r,g,b);
+            icon_line(x,y,s,7,20,7,4,r,g,b);
+            break;
+        case ICON_STOP:
+            icon_rect(x,y,s,5,5,14,14,r,g,b);
+            break;
+        case ICON_PREV:
+            icon_line(x,y,s,6,3,6,21,r,g,b);
+            icon_line(x,y,s,19,4,8,12,r,g,b);
+            icon_line(x,y,s,8,12,19,20,r,g,b);
+            break;
+        case ICON_NEXT:
+            icon_line(x,y,s,18,3,18,21,r,g,b);
+            icon_line(x,y,s,5,4,16,12,r,g,b);
+            icon_line(x,y,s,16,12,5,20,r,g,b);
+            break;
         default:
             break;
     }
@@ -595,6 +631,10 @@ static int load_project(void) {
     g_undo_count = 0;
     g_redo_count = 0;
     g_has_transform_clipboard = 0;
+    memset(g_animation, 0, sizeof(g_animation));
+    g_frame = 1;
+    g_playing = 0;
+    g_play_tick = 0;
     g_camera_distance = fmaxf(2.8f, g_model.radius * 3.8f);
     g_pose_mode = 1;
     reload_texture();
@@ -723,6 +763,297 @@ static void redo_transform(void) {
     snprintf(g_status, sizeof(g_status), "%s", "REDO TRANSFORM");
 }
 
+static void encode_bone_name(const char *source, char *dest, size_t capacity) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t out = 0;
+    size_t i;
+    if (!capacity) return;
+    for (i = 0; source && source[i] && out + 4 < capacity; ++i) {
+        unsigned char c = (unsigned char)source[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+            dest[out++] = (char)c;
+        } else {
+            dest[out++] = '%';
+            dest[out++] = hex[c >> 4];
+            dest[out++] = hex[c & 15];
+        }
+    }
+    dest[out] = '\0';
+}
+
+static int decode_bone_name(const char *source, char *dest, size_t capacity) {
+    size_t out = 0, i = 0;
+    if (!source || !capacity) return 0;
+    while (source[i] && out + 1 < capacity) {
+        if (source[i] == '%' && source[i+1] && source[i+2]) {
+            char hi = source[i+1], lo = source[i+2];
+            int a = (hi >= '0' && hi <= '9') ? hi-'0' :
+                    (hi >= 'A' && hi <= 'F') ? hi-'A'+10 :
+                    (hi >= 'a' && hi <= 'f') ? hi-'a'+10 : -1;
+            int b = (lo >= '0' && lo <= '9') ? lo-'0' :
+                    (lo >= 'A' && lo <= 'F') ? lo-'A'+10 :
+                    (lo >= 'a' && lo <= 'f') ? lo-'a'+10 : -1;
+            if (a >= 0 && b >= 0) {
+                dest[out++] = (char)((a << 4) | b);
+                i += 3;
+                continue;
+            }
+        }
+        dest[out++] = source[i++];
+    }
+    dest[out] = '\0';
+    return 1;
+}
+
+static void capture_animation_frame(int frame) {
+    int bone, axis;
+    VLAnimationFrame *key;
+    if (!g_model.loaded || frame < 1 || frame > VLENDER_TIMELINE_FRAMES) return;
+    key = &g_animation[frame - 1];
+    memset(key, 0, sizeof(*key));
+    for (bone = 0; bone < g_model.bone_count; ++bone) {
+        VLBone *b = &g_model.bones[bone];
+        for (axis = 0; axis < 3; ++axis) {
+            key->trs[bone][axis] = b->basis_rotation[axis];
+            key->trs[bone][3 + axis] = b->basis_location[axis];
+            key->trs[bone][6 + axis] = b->basis_scale[axis];
+        }
+    }
+    key->valid = 1;
+}
+
+static float interpolate_angle(float a, float b, float t) {
+    float delta = b - a;
+    while (delta > 3.14159265359f) delta -= 6.28318530718f;
+    while (delta < -3.14159265359f) delta += 6.28318530718f;
+    return a + delta * t;
+}
+
+static int apply_animation_frame(int frame, int announce) {
+    int left = -1, right = -1, i, bone, axis;
+    float t = 0.0f;
+    if (!g_model.loaded || frame < 1 || frame > VLENDER_TIMELINE_FRAMES) return 0;
+    for (i = 0; i < VLENDER_TIMELINE_FRAMES; ++i) {
+        if (!g_animation[i].valid) continue;
+        if (i <= frame - 1) left = i;
+        if (i >= frame - 1) { right = i; break; }
+    }
+    if (left < 0 && right < 0) {
+        if (announce) snprintf(g_status,sizeof(g_status),"%s","NO KEYFRAMES - INSERT A KEY");
+        return 0;
+    }
+    if (left < 0) left = right;
+    if (right < 0) right = left;
+    if (right != left) t = (float)((frame - 1) - left) / (float)(right - left);
+
+    for (bone = 0; bone < g_model.bone_count; ++bone) {
+        VLBone *b = &g_model.bones[bone];
+        for (axis = 0; axis < 9; ++axis) {
+            float a = g_animation[left].trs[bone][axis];
+            float z = g_animation[right].trs[bone][axis];
+            float value;
+            if (axis < 3) value = interpolate_angle(a, z, t);
+            else value = a + (z - a) * t;
+            if (axis < 3) b->basis_rotation[axis] = value;
+            else if (axis < 6) b->basis_location[axis - 3] = value;
+            else b->basis_scale[axis - 6] = value;
+        }
+    }
+    vl_model_update_skin(&g_model);
+    g_undo_count = 0;
+    g_redo_count = 0;
+    if (announce) {
+        snprintf(g_status,sizeof(g_status),"TIMELINE FRAME %02d",frame);
+    }
+    return 1;
+}
+
+static void goto_timeline_frame(int frame) {
+    if (frame < 1) frame = 1;
+    if (frame > VLENDER_TIMELINE_FRAMES) frame = VLENDER_TIMELINE_FRAMES;
+    g_playing = 0;
+    g_play_tick = 0;
+    g_frame = frame;
+    (void)apply_animation_frame(g_frame, 1);
+}
+
+static void insert_timeline_keyframe(void) {
+    if (!g_model.loaded || !g_pose_mode) {
+        snprintf(g_status,sizeof(g_status),"%s","ENTER POSE MODE TO INSERT A KEYFRAME");
+        return;
+    }
+    g_playing = 0;
+    g_play_tick = 0;
+    capture_animation_frame(g_frame);
+    snprintf(g_status,sizeof(g_status),"INSERTED KEYFRAME AT %02d",g_frame);
+}
+
+static void delete_timeline_keyframe(void) {
+    g_playing = 0;
+    g_play_tick = 0;
+    if (g_frame < 1 || g_frame > VLENDER_TIMELINE_FRAMES ||
+        !g_animation[g_frame - 1].valid) {
+        snprintf(g_status,sizeof(g_status),"%s","NO KEYFRAME AT CURRENT FRAME");
+        return;
+    }
+    memset(&g_animation[g_frame - 1],0,sizeof(g_animation[g_frame - 1]));
+    (void)apply_animation_frame(g_frame, 0);
+    snprintf(g_status,sizeof(g_status),"DELETED KEYFRAME AT %02d",g_frame);
+}
+
+static void toggle_timeline_playback(void) {
+    if (!g_model.loaded) {
+        snprintf(g_status,sizeof(g_status),"%s","LOAD A PROJECT BEFORE PLAYBACK");
+        return;
+    }
+    {
+        int i, found = 0;
+        for (i = 0; i < VLENDER_TIMELINE_FRAMES; ++i)
+            if (g_animation[i].valid) { found = 1; break; }
+        if (!found) {
+            snprintf(g_status,sizeof(g_status),"%s","INSERT AT LEAST ONE KEYFRAME");
+            return;
+        }
+    }
+    g_playing = !g_playing;
+    g_play_tick = 0;
+    g_undo_count = 0;
+    g_redo_count = 0;
+    snprintf(g_status,sizeof(g_status),"TIMELINE %s",g_playing ? "PLAYING" : "PAUSED");
+}
+
+static void save_animation(void) {
+    FILE *file;
+    int frame, bone, axis, has_keyframe = 0;
+    char encoded[VLENDER_NAME_MAX * 3];
+    ensure_data_directory();
+    if (!g_model.loaded) {
+        snprintf(g_status,sizeof(g_status),"%s","SAVE ANIMATION FAILED - NO PROJECT");
+        return;
+    }
+    for (frame = 0; frame < VLENDER_TIMELINE_FRAMES; ++frame) {
+        if (g_animation[frame].valid) { has_keyframe = 1; break; }
+    }
+    if (!has_keyframe) {
+        snprintf(g_status,sizeof(g_status),"%s","NO KEYFRAMES TO SAVE");
+        return;
+    }
+    file = fopen(PATH_ANIM_OUT, "wb");
+    if (!file) {
+        snprintf(g_status,sizeof(g_status),"%s","ANIMATION SAVE FAILED");
+        return;
+    }
+    fprintf(file,"VLENDER_ANIM 1\n");
+    for (frame = 0; frame < VLENDER_TIMELINE_FRAMES; ++frame) {
+        if (!g_animation[frame].valid) continue;
+        fprintf(file,"F %d\n",frame + 1);
+        for (bone = 0; bone < g_model.bone_count; ++bone) {
+            encode_bone_name(g_model.bones[bone].name,encoded,sizeof(encoded));
+            fprintf(file,"B %s",encoded);
+            for (axis = 0; axis < 9; ++axis)
+                fprintf(file," %.7g",g_animation[frame].trs[bone][axis]);
+            fputc('\n',file);
+        }
+    }
+    {
+        int write_failed = ferror(file);
+        if (fclose(file) != 0) write_failed = 1;
+        if (write_failed) {
+            snprintf(g_status,sizeof(g_status),"%s","ANIMATION SAVE FAILED");
+            return;
+        }
+    }
+    snprintf(g_status,sizeof(g_status),"%s","SAVED output.vlanim - IMPORT IN BLENDER");
+}
+
+static int parse_animation_file(void) {
+    FILE *file;
+    char line[1024];
+    VLAnimationFrame *candidate;
+    int header_seen = 0, current_frame = -1, matched = 0, has_frame = 0;
+    file = fopen(PATH_ANIM_IN,"rb");
+    if (!file) return 0;
+    candidate = (VLAnimationFrame *)calloc(VLENDER_TIMELINE_FRAMES,sizeof(*candidate));
+    if (!candidate) { fclose(file); return 0; }
+
+    while (fgets(line,sizeof(line),file)) {
+        char *trim = line;
+        size_t length = strlen(line);
+        char type[8];
+        char extra;
+        if (length == sizeof(line)-1 && line[length-1] != '\n') {
+            int ch;
+            while ((ch=fgetc(file)) != '\n' && ch != EOF) { }
+            goto fail;
+        }
+        while (*trim == ' ' || *trim == '\t') ++trim;
+        if (*trim == '\0' || *trim == '\n' || *trim == '#') continue;
+        if (sscanf(trim,"%7s",type) != 1) continue;
+        if (strcmp(type,"VLENDER_ANIM") == 0) {
+            int version = 0;
+            if (header_seen || sscanf(trim,"VLENDER_ANIM %d %c",&version,&extra) != 1 || version != 1) goto fail;
+            header_seen = 1;
+        } else if (strcmp(type,"F") == 0) {
+            int frame;
+            if (!header_seen || sscanf(trim,"F %d %c",&frame,&extra) != 1 ||
+                frame < 1 || frame > VLENDER_TIMELINE_FRAMES) goto fail;
+            current_frame = frame - 1;
+            has_frame = 1;
+            {
+                int bone, axis;
+                for (bone = 0; bone < g_model.bone_count; ++bone) {
+                    VLBone *source_bone = &g_model.bones[bone];
+                    for (axis = 0; axis < 3; ++axis) {
+                        candidate[current_frame].trs[bone][axis] = source_bone->basis_rotation[axis];
+                        candidate[current_frame].trs[bone][3 + axis] = source_bone->basis_location[axis];
+                        candidate[current_frame].trs[bone][6 + axis] = source_bone->basis_scale[axis];
+                    }
+                }
+            }
+        } else if (strcmp(type,"B") == 0) {
+            char encoded[VLENDER_NAME_MAX * 3];
+            float values[9];
+            char name[VLENDER_NAME_MAX];
+            int bone, n;
+            if (!header_seen || current_frame < 0 ||
+                sscanf(trim,"B %239s %f %f %f %f %f %f %f %f %f %c",
+                       encoded,&values[0],&values[1],&values[2],
+                       &values[3],&values[4],&values[5],
+                       &values[6],&values[7],&values[8],&extra) != 10) goto fail;
+            for (n = 0; n < 9; ++n) if (!isfinite(values[n])) goto fail;
+            decode_bone_name(encoded,name,sizeof(name));
+            bone = vl_model_find_bone(&g_model,name);
+            if (bone >= 0) {
+                memcpy(candidate[current_frame].trs[bone],values,sizeof(values));
+                candidate[current_frame].valid = 1;
+                ++matched;
+            }
+        } else {
+            goto fail;
+        }
+    }
+    {
+        int close_failed = ferror(file);
+        if (fclose(file) != 0) close_failed = 1;
+        file = NULL;
+        if (close_failed) goto fail;
+    }
+    if (!header_seen || !has_frame || matched == 0) goto fail;
+    memcpy(g_animation,candidate,sizeof(g_animation));
+    free(candidate);
+    g_playing = 0;
+    g_play_tick = 0;
+    goto_timeline_frame(1);
+    snprintf(g_status,sizeof(g_status),"LOADED ANIMATION - %d BONE RECORDS",matched);
+    return 1;
+
+fail:
+    if (file) fclose(file);
+    free(candidate);
+    return 0;
+}
+
 static void copy_selected_transform(void) {
     int i;
     if (!g_model.loaded || !g_pose_mode || g_selected_bone < 0 ||
@@ -792,6 +1123,11 @@ static float active_transform_max(void) {
 
 static void set_active_transform(float value) {
     if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0 || !g_pose_mode) return;
+    if (g_playing) {
+        g_playing = 0;
+        g_play_tick = 0;
+        snprintf(g_status,sizeof(g_status),"%s","PLAYBACK PAUSED FOR EDITING");
+    }
     if (!g_drag_slider) history_record_undo();
     if (g_transform_tool == 1) {
         g_model.bones[g_selected_bone].basis_location[g_active_axis] =
@@ -820,6 +1156,10 @@ static void adjust_rotation(float amount) {
 static void reset_active_transform(void) {
     int i;
     if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0 || !g_pose_mode) return;
+    if (g_playing) {
+        g_playing = 0;
+        g_play_tick = 0;
+    }
     history_record_undo();
     if (g_transform_tool == 1) {
         g_model.bones[g_selected_bone].basis_location[g_active_axis] = 0.0f;
@@ -1196,22 +1536,39 @@ static void draw_toolbar(void) {
 static void draw_timeline(void) {
     int i;
     char label[40];
-    text2d(16,431,1.15f,0.89f,0.91f,0.93f,"TIMELINE");
-    text2d(16,449,0.9f,0.49f,0.55f,0.61f,"FRAME");
-    snprintf(label,sizeof(label),"%04d",g_frame);
-    text2d(58,449,1.05f,0.55f,0.96f,0.49f,label);
-    line2d(150,436,150,487,0.23f,0.27f,0.31f);
-    for (i = 0; i <= 80; ++i) {
-        float x = 168.0f + (float)i * 9.0f;
-        if (x > 942.0f) break;
+    text2d(16,431,1.12f,0.89f,0.91f,0.93f,"TIMELINE");
+    text2d(16,449,0.82f,0.49f,0.55f,0.61f,"FRAME");
+    snprintf(label,sizeof(label),"%02d / %02d",g_frame,VLENDER_TIMELINE_FRAMES);
+    text2d(56,449,0.87f,0.55f,0.96f,0.49f,label);
+
+    button_icon2d(91,442,18,22,ICON_PREV,0);
+    button_icon2d(111,442,18,22,ICON_NEXT,0);
+    button_icon2d(131,442,18,22,ICON_KEYFRAME,
+                  g_animation[g_frame - 1].valid);
+    button_icon2d(151,442,18,22,g_playing ? ICON_STOP : ICON_PLAY,g_playing);
+
+    line2d(178,436,178,487,0.23f,0.27f,0.31f);
+    for (i = 0; i < VLENDER_TIMELINE_FRAMES; ++i) {
+        float x = 188.0f + (float)i * 9.0f;
         float height = (i % 10 == 0) ? 15.0f : (i % 5 == 0 ? 9.0f : 5.0f);
+        if (g_animation[i].valid) {
+            set_color(0.40f,0.91f,0.42f);
+            glPointSize(4.0f);
+            glBegin(GL_POINTS);
+            glVertex2f(x,441.0f);
+            glEnd();
+        }
         line2d(x,455.0f-height*0.5f,x,455.0f+height*0.5f,
-               i == (g_frame % 80) ? 0.45f : 0.33f,
-               i == (g_frame % 80) ? 0.95f : 0.37f,
-               i == (g_frame % 80) ? 0.38f : 0.42f);
+               g_animation[i].valid ? 0.40f : 0.33f,
+               g_animation[i].valid ? 0.91f : 0.37f,
+               g_animation[i].valid ? 0.42f : 0.42f);
     }
-    line2d(168.0f + (float)(g_frame % 80) * 9.0f,437.0f,
-           168.0f + (float)(g_frame % 80) * 9.0f,480.0f,0.96f,0.42f,0.15f);
+    line2d(188.0f + (float)(g_frame - 1) * 9.0f,437.0f,
+           188.0f + (float)(g_frame - 1) * 9.0f,480.0f,
+           g_playing ? 0.35f : 0.96f,g_playing ? 0.95f : 0.42f,
+           g_playing ? 0.48f : 0.15f);
+    text2d(850,480,0.68f,0.45f,0.52f,0.58f,
+           g_playing ? "PLAYING" : "POSE KEYS");
 }
 
 static int popup_menu_x(void) {
@@ -1231,8 +1588,8 @@ static int popup_menu_width(void) {
 
 static int popup_menu_rows(void) {
     switch (g_open_menu) {
-        case 1: return 4;
-        case 2: return 5;
+        case 1: return 6;
+        case 2: return 8;
         case 3: return 5;
         case 4: return 3;
         case 5: return 5;
@@ -1242,11 +1599,13 @@ static int popup_menu_rows(void) {
 
 static const char *popup_menu_label(int row) {
     static const char *file_items[] = {
-        "Reload Project", "Load Pose", "Save Pose", "Close Menu"
+        "Reload Project", "Load Pose", "Save Pose",
+        "Load Animation", "Save Animation", "Close Menu"
     };
     static const char *edit_items[] = {
         "Undo Transform", "Redo Transform", "Copy Bone TRS",
-        "Paste Bone TRS", "Reset Bone Transform"
+        "Paste Bone TRS", "Reset Bone Transform", "Insert Keyframe",
+        "Delete Keyframe", "Play / Pause Timeline"
     };
     static const char *render_items[] = {
         "Toggle Texture", "Toggle Wireframe", "Toggle Skeleton",
@@ -1262,8 +1621,8 @@ static const char *popup_menu_label(int row) {
     };
     if (row < 0) return "";
     switch (g_open_menu) {
-        case 1: return row < 4 ? file_items[row] : "";
-        case 2: return row < 5 ? edit_items[row] : "";
+        case 1: return row < 6 ? file_items[row] : "";
+        case 2: return row < 8 ? edit_items[row] : "";
         case 3: return row < 5 ? render_items[row] : "";
         case 4: return row < 3 ? window_items[row] : "";
         case 5: return row < 5 ? help_items[row] : "";
@@ -1301,6 +1660,10 @@ static void execute_popup_item(int row) {
             if (row == 0) load_project();
             else if (row == 1) load_pose();
             else if (row == 2) save_pose();
+            else if (row == 3) {
+                if (!g_model.loaded || !parse_animation_file())
+                    snprintf(g_status,sizeof(g_status),"%s","ANIMATION LOAD FAILED - CHECK input.vlanim");
+            } else if (row == 4) save_animation();
             break;
         case 2:
             if (row == 0) undo_transform();
@@ -1308,6 +1671,9 @@ static void execute_popup_item(int row) {
             else if (row == 2) copy_selected_transform();
             else if (row == 3) paste_selected_transform();
             else if (row == 4) reset_active_transform();
+            else if (row == 5) insert_timeline_keyframe();
+            else if (row == 6) delete_timeline_keyframe();
+            else if (row == 7) toggle_timeline_playback();
             break;
         case 3:
             if (row == 0) {
@@ -1497,6 +1863,17 @@ static void on_touch_press(int x, int y) {
     if (x >= 748 && x < 798 && y >= 382 && y < 408) { adjust_rotation(5.0f); return; }
     if (x >= 802 && x < 870 && y >= 382 && y < 408) { reset_active_transform(); return; }
     if (x >= 876 && x < 940 && y >= 382 && y < 408) { g_pose_mode = !g_pose_mode; return; }
+    if (y >= 436 && y <= 486) {
+        if (x >= 91 && x < 109) { goto_timeline_frame(g_frame - 1); return; }
+        if (x >= 111 && x < 129) { goto_timeline_frame(g_frame + 1); return; }
+        if (x >= 131 && x < 149) { insert_timeline_keyframe(); return; }
+        if (x >= 151 && x < 169) { toggle_timeline_playback(); return; }
+        if (x >= 188 && x <= 908) {
+            int frame = 1 + (int)((x - 188 + 4) / 9);
+            goto_timeline_frame(frame);
+            return;
+        }
+    }
     if (x >= 44 && x <= 676 && y >= 52 && y <= 418) {
         g_drag_camera = 1;
     }
@@ -1573,6 +1950,13 @@ static int update_input(void) {
         }
         g_drag_camera = 0;
         g_drag_slider = 0;
+    }
+    if (g_playing) {
+        if (++g_play_tick >= 6) {
+            g_play_tick = 0;
+            g_frame = g_frame >= VLENDER_TIMELINE_FRAMES ? 1 : g_frame + 1;
+            (void)apply_animation_frame(g_frame, 0);
+        }
     }
     g_touch_down = touch_is_down;
     return 1;

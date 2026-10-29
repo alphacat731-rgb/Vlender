@@ -1,10 +1,10 @@
 bl_info = {
     "name": "Vlender Project Bridge",
     "author": "Vlender contributors",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (3, 6, 0),
     "location": "File > Export, View3D > Sidebar > Vlender",
-    "description": "Export a textured, skinned mesh and armature for the Vlender PS Vita 3D editor",
+    "description": "Exchange meshes, poses, and sampled animations with the Vlender PS Vita 3D editor",
     "category": "Import-Export",
 }
 
@@ -405,6 +405,182 @@ class IMPORT_SCENE_OT_vlender_pose(bpy.types.Operator, ImportHelper):
         return {"FINISHED"}
 
 
+def parse_animation_file(filepath):
+    """Read Vlender's 80-frame animation interchange format."""
+    frames = {}
+    current_frame = None
+    header_seen = False
+    with open(filepath, "r", encoding="utf-8") as stream:
+        for line_number, raw_line in enumerate(stream, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if not header_seen:
+                if parts != ["VLENDER_ANIM", "1"]:
+                    raise ValueError("Expected header VLENDER_ANIM 1")
+                header_seen = True
+                continue
+            if parts[0] == "F":
+                if len(parts) != 2:
+                    raise ValueError("Invalid frame record on line %d" % line_number)
+                try:
+                    current_frame = int(parts[1])
+                except ValueError as exc:
+                    raise ValueError("Invalid frame number on line %d" % line_number) from exc
+                if not 1 <= current_frame <= 80:
+                    raise ValueError("Frame number must be between 1 and 80")
+                frames.setdefault(current_frame, {})
+                continue
+            if parts[0] == "B":
+                if current_frame is None or len(parts) != 11:
+                    raise ValueError("Invalid bone record on line %d" % line_number)
+                try:
+                    values = [float(value) for value in parts[2:]]
+                except ValueError as exc:
+                    raise ValueError("Invalid transform on line %d" % line_number) from exc
+                if not all(math.isfinite(value) for value in values):
+                    raise ValueError("Non-finite transform on line %d" % line_number)
+                name = decode_name(parts[1])
+                frames[current_frame][name] = {
+                    "rotation": values[0:3],
+                    "location": values[3:6],
+                    "scale": values[6:9],
+                }
+            else:
+                raise ValueError("Unknown record on line %d" % line_number)
+    if not header_seen or not any(frames.values()):
+        raise ValueError("Animation file contains no matching bone records")
+    return frames
+
+
+class EXPORT_SCENE_OT_vlender_animation(bpy.types.Operator, ExportHelper):
+    """Sample the current armature action and export up to 80 frames for Vlender"""
+    bl_idname = "export_scene.vlender_animation"
+    bl_label = "Export Vlender Animation"
+    bl_options = {"PRESET"}
+
+    filename_ext = ".vlanim"
+    filter_glob: StringProperty(default="*.vlanim", options={"HIDDEN"})
+
+    def execute(self, context):
+        armature = find_armature(context)
+        if not armature or not armature.pose:
+            self.report({"ERROR"}, "Select an armature with an animation action.")
+            return {"CANCELLED"}
+        if not armature.animation_data or not armature.animation_data.action:
+            self.report({"ERROR"}, "The selected armature has no active action to sample.")
+            return {"CANCELLED"}
+
+        scene = context.scene
+        start_frame = scene.frame_start
+        end_frame = min(scene.frame_end, start_frame + 79)
+        if end_frame < start_frame:
+            self.report({"ERROR"}, "The scene frame range is empty.")
+            return {"CANCELLED"}
+
+        original_frame = scene.frame_current
+        try:
+            with open(self.filepath, "w", encoding="utf-8", newline="\n") as stream:
+                stream.write("VLENDER_ANIM 1\n")
+                for source_frame in range(start_frame, end_frame + 1):
+                    scene.frame_set(source_frame)
+                    context.view_layer.update()
+                    target_frame = source_frame - start_frame + 1
+                    stream.write("F %d\n" % target_frame)
+                    for pose_bone in armature.pose.bones:
+                        location, quaternion, scale = pose_bone.matrix_basis.decompose()
+                        rotation = quaternion.to_euler("XYZ")
+                        values = (
+                            rotation.x, rotation.y, rotation.z,
+                            location.x, location.y, location.z,
+                            scale.x, scale.y, scale.z,
+                        )
+                        stream.write("B %s %s\n" % (
+                            encode_name(pose_bone.name),
+                            " ".join("%.7g" % value for value in values),
+                        ))
+        except (OSError, RuntimeError, ValueError, OverflowError) as exc:
+            self.report({"ERROR"}, "Could not export animation: %s" % exc)
+            return {"CANCELLED"}
+        finally:
+            scene.frame_set(original_frame)
+            context.view_layer.update()
+
+        self.report({"INFO"}, "Exported %d animation frames to Vlender." % (end_frame - start_frame + 1))
+        return {"FINISHED"}
+
+
+class IMPORT_SCENE_OT_vlender_animation(bpy.types.Operator, ImportHelper):
+    """Import a Vlender .vlanim file as a new action on the selected armature"""
+    bl_idname = "import_scene.vlender_animation"
+    bl_label = "Import Vlender Animation"
+
+    filename_ext = ".vlanim"
+    filter_glob: StringProperty(default="*.vlanim", options={"HIDDEN"})
+
+    def execute(self, context):
+        armature = find_armature(context)
+        if not armature or not armature.pose:
+            self.report({"ERROR"}, "Select the target armature.")
+            return {"CANCELLED"}
+        try:
+            frames = parse_animation_file(self.filepath)
+        except (OSError, ValueError) as exc:
+            self.report({"ERROR"}, "Could not read animation: %s" % exc)
+            return {"CANCELLED"}
+
+        matched_names = {
+            name for frame_data in frames.values()
+            for name in frame_data if armature.pose.bones.get(name) is not None
+        }
+        if not matched_names:
+            self.report({"ERROR"}, "None of the animation's bone names match the selected armature.")
+            return {"CANCELLED"}
+
+        action = bpy.data.actions.new("Vlender Animation")
+        animation_data = armature.animation_data_create()
+        # Blender 4.4+ uses slotted Actions. Assign a slot explicitly so the
+        # newly imported F-curves are guaranteed to drive this armature.
+        if hasattr(action, "slots") and hasattr(animation_data, "action_slot"):
+            slot = action.slots.new(armature.id_type, armature.name)
+            animation_data.action = action
+            animation_data.action_slot = slot
+        else:
+            animation_data.action = action
+
+        applied_frames = 0
+        applied_bones = 0
+        missing_names = set()
+        for frame_number in sorted(frames):
+            context.scene.frame_set(frame_number)
+            for name, transform in frames[frame_number].items():
+                pose_bone = armature.pose.bones.get(name)
+                if pose_bone is None:
+                    missing_names.add(name)
+                    continue
+                pose_bone.rotation_mode = "XYZ"
+                pose_bone.rotation_euler = transform["rotation"]
+                pose_bone.location = transform["location"]
+                pose_bone.scale = transform["scale"]
+                pose_bone.keyframe_insert(data_path="location", frame=frame_number, group=name)
+                pose_bone.keyframe_insert(data_path="rotation_euler", frame=frame_number, group=name)
+                pose_bone.keyframe_insert(data_path="scale", frame=frame_number, group=name)
+                applied_bones += 1
+            applied_frames += 1
+
+        context.scene.frame_start = min(frames)
+        context.scene.frame_end = max(frames)
+        context.scene.frame_set(min(frames))
+        context.view_layer.update()
+        self.report(
+            {"INFO"},
+            "Imported %d frames; inserted %d bone-frame samples; skipped %d unknown bone names."
+            % (applied_frames, applied_bones, len(missing_names)),
+        )
+        return {"FINISHED"}
+
+
 class VIEW3D_PT_vlender_bridge(bpy.types.Panel):
     bl_label = "Vlender"
     bl_idname = "VIEW3D_PT_vlender_bridge"
@@ -418,6 +594,8 @@ class VIEW3D_PT_vlender_bridge(bpy.types.Panel):
         layout.operator("export_scene.vlender_project", icon="EXPORT")
         layout.operator("export_scene.vlender_pose", icon="EXPORT")
         layout.operator("import_scene.vlender_pose", icon="IMPORT")
+        layout.operator("export_scene.vlender_animation", icon="EXPORT")
+        layout.operator("import_scene.vlender_animation", icon="IMPORT")
         layout.separator()
         layout.label(text="One mesh + armature per project")
         layout.label(text="Texture maps are exported as BMP")
@@ -445,10 +623,26 @@ def menu_import_pose(self, context):
     )
 
 
+def menu_export_animation(self, context):
+    self.layout.operator(
+        EXPORT_SCENE_OT_vlender_animation.bl_idname,
+        text="Vlender Animation (.vlanim)",
+    )
+
+
+def menu_import_animation(self, context):
+    self.layout.operator(
+        IMPORT_SCENE_OT_vlender_animation.bl_idname,
+        text="Vlender Animation (.vlanim)",
+    )
+
+
 CLASSES = (
     EXPORT_SCENE_OT_vlender_project,
     EXPORT_SCENE_OT_vlender_pose,
     IMPORT_SCENE_OT_vlender_pose,
+    EXPORT_SCENE_OT_vlender_animation,
+    IMPORT_SCENE_OT_vlender_animation,
     VIEW3D_PT_vlender_bridge,
 )
 
@@ -458,13 +652,17 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_export.append(menu_export_project)
     bpy.types.TOPBAR_MT_file_export.append(menu_export_pose)
+    bpy.types.TOPBAR_MT_file_export.append(menu_export_animation)
     bpy.types.TOPBAR_MT_file_import.append(menu_import_pose)
+    bpy.types.TOPBAR_MT_file_import.append(menu_import_animation)
 
 
 def unregister():
     bpy.types.TOPBAR_MT_file_export.remove(menu_export_project)
     bpy.types.TOPBAR_MT_file_export.remove(menu_export_pose)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_export_animation)
     bpy.types.TOPBAR_MT_file_import.remove(menu_import_pose)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_import_animation)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 

@@ -17,6 +17,7 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - Undo/redo the last 24 bone-transform edits using the top-bar curved-arrow buttons. History follows the bone that was edited, even after selection changes.
 - Copy a selected bone's full location/rotation/scale transform and paste it onto another bone while in Pose mode; clipboard clears when a different project is loaded.
 - Use the File, Edit, Render, Window, and Help menus for their corresponding project, pose, undo/redo, transform clipboard, viewport display, mode, camera, and control-help actions.
+- Use the bottom timeline to scrub frames 1–80, insert/delete pose keyframes, play/pause interpolated bone motion, and save/load `.vlanim` animation files. The Blender add-on can sample an active action into `.vlanim` or import a Vlender animation as a new action.
 - Failed or malformed project loads preserve the currently loaded model; project parsing rejects non-finite values, invalid weights, incomplete triangles, duplicate bone names, and cyclic/out-of-range bone hierarchies.
 - Generate an app icon and LiveArea art, with GitHub Actions inputs to choose custom PNG files and the displayed app name.
 - Use an offline set of built-in Material-style vector icons for the toolbar and action buttons; no online font fetch is required.
@@ -27,7 +28,7 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - This alpha exports one mesh per project, with the mesh's active UV map and one base-colour image texture. Complex Blender shader graphs, multiple materials, modifiers, shape keys, cloth/physics, and animation playback are not evaluated by the Vita exporter.
 - The texture bridge writes a 24-bit BMP preview with a maximum edge of 512 pixels to fit the Vita memory/GPU budget.
 - The file format now accepts up to 256 bones and 15,000 triangles (45,000 triangle corners). Larger scenes still need decimation for Vita performance and memory use.
-- The viewport editor is Blender-inspired, not a pixel-perfect port of Blender's desktop UI. The timeline is visual scaffolding, not a keyframe animation editor yet.
+- The viewport editor is Blender-inspired, not a pixel-perfect port of Blender's desktop UI. Timeline animation is intentionally limited to 80 sampled frames and Euler TRS; it does not support constraints, NLA, shape keys, or Blender's full animation system.
 - vitaGL homebrew requires the compatible console-side shader compiler module (`libshacccg.suprx`) to be available on the Vita. The build does not bundle proprietary system files.
 
 ## Build locally
@@ -54,7 +55,10 @@ The package should be `build/Vlender.vpk`. GitHub Actions runs the same toolchai
 5. Start Vlender. The initial viewport shows a demo cube when no project is loaded. Tap **OPEN** to reload the model from `ux0:data/VLENDER/model.vlmesh`, or copy the project before launching.
 6. Tap a bone in the **Outliner** or directly in the 3D viewport to select it. Tap **SEL**, **MOV**, **ROT**, or **SCL** on the left toolbar to choose the transform tool. Use the **TEX** switch to show/hide the base-colour texture or the **WIREFR** switch to overlay triangle edges. The lower toolbar icons toggle the grid and skeleton overlay; use the top camera-frame icon to reset the view. Use the X/Y/Z buttons and property slider to adjust the active axis. Drag in the 3D viewport to orbit the camera. D-pad up/down selects bones; left/right adjusts the active tool; Cross changes axis; Circle resets the active transform; Select resets the camera; L/R make finer adjustments.
 7. Tap **SAVE**, or press Triangle, to write `ux0:data/VLENDER/output.vlpose`.
-8. Copy `output.vlpose` to the PC and use **File → Import → Vlender Pose (.vlpose)** in Blender. Review the pose and save a new `.blend` file.
+8. In the **Timeline** at the bottom, tap a frame tick to scrub. The diamond button inserts/overwrites a keyframe for the entire current pose; the play button previews interpolation, and the left/right buttons step frames. The Edit menu can also insert/delete a keyframe or toggle playback.
+9. Use **File → Save Animation** in Vlender to write `ux0:data/VLENDER/output.vlanim`. Copy it to the PC and use **File → Import → Vlender Animation (.vlanim)** in Blender to create an Action.
+10. To bring an existing Blender action to Vita, use **File → Export → Vlender Animation (.vlanim)** in Blender, copy it to `ux0:data/VLENDER/input.vlanim`, then choose **File → Load Animation** in Vlender.
+11. To bring a saved pose back to Blender, copy `output.vlpose` to the PC and use **File → Import → Vlender Pose (.vlpose)**. Review the result and save a new `.blend` file.
 
 The `.vlmesh` is a **single-mesh interchange format**, not a Blender file. Keep your original `.blend` and a backup. If the selected rig uses unusual constraints or non-standard bone setups, review the imported pose in Blender before saving.
 
