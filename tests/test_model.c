@@ -76,6 +76,17 @@ int main(void) {
     CHECK(fabsf(model.bones[0].basis_rotation[0] - 0.25f) < 0.0001f,
           "pose round-trip keeps rotation");
 
+    {
+        FILE *bad_pose = fopen(TEST_POSE, "wb");
+        CHECK(bad_pose != NULL, "open malformed pose");
+        fprintf(bad_pose, "VLENDER_POSE 1\\nB Bone0 0 0 NaN 0 0 0 1 1 1\\n");
+        CHECK(fclose(bad_pose) == 0, "close malformed pose");
+    }
+    CHECK(vl_model_load_pose(&model, TEST_POSE) == 0,
+          "pose with non-finite transform is rejected");
+    CHECK(fabsf(model.bones[0].basis_rotation[0] - 0.25f) < 0.0001f,
+          "failed pose load preserves current pose");
+
     CHECK(write_project(1, 0, 3, 1), "write NaN project");
     CHECK(!vl_model_load_project(&model, TEST_PROJECT), "NaN project is rejected");
     CHECK(model.loaded == 1 && model.vertex_count == 3 && model.bone_count == 1,
