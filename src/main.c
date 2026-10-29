@@ -17,7 +17,7 @@
 #define MAX_BONES 64
 #define NAME_CAP 96
 #define MAX_LINE 320
-#define BONE_ROW_Y 118
+#define BONE_ROW_Y 147
 #define BONE_ROW_H 29
 
 #define C_BG       RGBA8(14, 17, 22, 255)
@@ -660,8 +660,8 @@ static void handle_touch(int x, int y) {
     }
 
     if (g_page == 0) {
-        if (x >= 28 && x < 246 && y >= 100 && y < 432) {
-            int row = (y - 99) / BONE_ROW_H;
+        if (x >= 28 && x < 246 && y >= 128 && y < 420) {
+            int row = (y - 128) / BONE_ROW_H;
             int index = g_list_offset + row;
             if (index >= 0 && index < g_bone_count) {
                 g_selected = index;
