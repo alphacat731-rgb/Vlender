@@ -553,7 +553,7 @@ static int load_pose(void) {
         return 0;
     }
 
-    char buffer[16384];
+    static char buffer[65536];
     int bytes = sceIoRead(fd, buffer, sizeof(buffer) - 1);
     sceIoClose(fd);
     if (bytes <= 0) {
