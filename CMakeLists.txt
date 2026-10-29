@@ -6,14 +6,13 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VITASDK})
 endif()
 
 if(NOT DEFINED ENV{VITASDK})
-    message(FATAL_ERROR "VITASDK is not set. Install VitaSDK or build in the official VitaSDK container.")
+    message(FATAL_ERROR "VITASDK is not set. Install VitaSDK or use the official VitaSDK container.")
 endif()
 
 include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
-
 project(Vlender C)
 
-set(VITA_APP_NAME "Vlender")
+set(VITA_APP_NAME "Vlender" CACHE STRING "Name shown in the PlayStation Vita LiveArea")
 set(VITA_TITLEID "VLD000001")
 set(VITA_VERSION "01.00")
 
@@ -22,22 +21,22 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_executable(Vlender
     src/main.c
+    src/model.c
 )
 
 target_compile_options(Vlender PRIVATE
+    -Os
+    -fno-lto
     -Wall
     -Wextra
-    -Wshadow
-    -Wconversion
     -Wno-sign-conversion
-    -fno-lto
-    -Os
 )
 
+# vitaGL provides hardware-accelerated 3D. These libraries mirror the
+# upstream vitaGL sample's VitaSDK link dependencies.
 target_link_options(Vlender PRIVATE -Wl,-q -fno-lto)
-
 target_link_libraries(Vlender PRIVATE
-    vita2d
+    vitaGL
     SceDisplay_stub
     SceCtrl_stub
     SceTouch_stub
@@ -46,15 +45,16 @@ target_link_libraries(Vlender PRIVATE
     SceIofilemgr_stub
     SceAppMgr_stub
     SceProcessmgr_stub
-    ScePgf_stub
-    ScePvf_stub
     SceCommonDialog_stub
-    freetype
-    png
-    jpeg
-    z
+    SceShaccCg_stub
+    SceShaccCgExt
+    SceKernelDmacMgr_stub
+    taihen_stub
+    vitashark
+    mathneon
     m
     c
+    stdc++
 )
 
 vita_create_self(eboot.bin Vlender UNSAFE)
@@ -62,4 +62,8 @@ vita_create_self(eboot.bin Vlender UNSAFE)
 vita_create_vpk(Vlender.vpk ${VITA_TITLEID} eboot.bin
     VERSION ${VITA_VERSION}
     NAME ${VITA_APP_NAME}
+    FILE assets/branding/icon0.png sce_sys/icon0.png
+    FILE assets/branding/livearea/bg.png sce_sys/livearea/contents/bg.png
+    FILE assets/branding/livearea/startup.png sce_sys/livearea/contents/startup.png
+    FILE assets/branding/livearea/template.xml sce_sys/livearea/contents/template.xml
 )

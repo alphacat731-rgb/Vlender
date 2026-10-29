@@ -1,14 +1,16 @@
 bl_info = {
-    "name": "Vlender Pose Bridge",
+    "name": "Vlender Project Bridge",
     "author": "Vlender contributors",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (3, 6, 0),
-    "location": "File > Import/Export, View3D > Sidebar > Vlender",
-    "description": "Exchange local armature pose transforms with the Vlender PS Vita editor",
+    "location": "File > Export, View3D > Sidebar > Vlender",
+    "description": "Export a textured, skinned mesh and armature for the Vlender PS Vita 3D editor",
     "category": "Import-Export",
 }
 
 import os
+import math
+import struct
 from urllib.parse import quote, unquote
 
 import bpy
@@ -17,11 +19,15 @@ from bpy_extras.io_utils import ExportHelper, ImportHelper
 
 
 POSE_HEADER = "VLENDER_POSE 1"
+MESH_HEADER = "VLENDER_MESH 1"
+MAX_TEXTURE_EDGE = 512
+MAX_BONES = 128
+MAX_TRIANGLE_CORNERS = 30000
 
 
 def find_armature(context):
-    active = context.view_layer.objects.active
     candidates = []
+    active = context.view_layer.objects.active
     if active:
         candidates.append(active)
     candidates.extend(obj for obj in context.selected_objects if obj not in candidates)
@@ -35,28 +41,41 @@ def find_armature(context):
                 return armature
             if obj.parent and obj.parent.type == "ARMATURE":
                 return obj.parent
+
     for obj in context.scene.objects:
         if obj.type == "ARMATURE" and obj.select_get():
             return obj
     return None
 
 
-def encode_bone_name(name):
-    # Keep the file easy to parse from C while preserving arbitrary bone names.
+def find_mesh_for_armature(context, armature):
+    active = context.view_layer.objects.active
+    candidates = []
+    if active and active.type == "MESH":
+        candidates.append(active)
+    candidates.extend(obj for obj in context.selected_objects
+                      if obj.type == "MESH" and obj not in candidates)
+    candidates.extend(obj for obj in context.scene.objects
+                      if obj.type == "MESH" and obj not in candidates)
+    for obj in candidates:
+        if obj.find_armature() == armature or obj.parent == armature:
+            return obj
+    return None
+
+
+def encode_name(name):
     return quote(name, safe="._-")
 
 
-def decode_bone_name(name):
+def decode_name(name):
     return unquote(name)
 
 
 def parse_pose_file(filepath):
     pose = {}
     with open(filepath, "r", encoding="utf-8") as stream:
-        header = stream.readline().strip()
-        if header != POSE_HEADER:
-            raise ValueError("Unsupported file header: expected " + POSE_HEADER)
-
+        if stream.readline().strip() != POSE_HEADER:
+            raise ValueError("Expected file header " + POSE_HEADER)
         for line_number, raw_line in enumerate(stream, start=2):
             line = raw_line.strip()
             if not line or line.startswith("#"):
@@ -64,14 +83,11 @@ def parse_pose_file(filepath):
             parts = line.split()
             if len(parts) != 11 or parts[0] != "B":
                 raise ValueError("Invalid bone record on line %d" % line_number)
-            name = decode_bone_name(parts[1])
             try:
                 values = [float(value) for value in parts[2:]]
             except ValueError as exc:
-                raise ValueError("Non-numeric transform on line %d" % line_number) from exc
-            if len(values) != 9:
-                raise ValueError("Expected 9 transform values on line %d" % line_number)
-            pose[name] = {
+                raise ValueError("Invalid transform on line %d" % line_number) from exc
+            pose[decode_name(parts[1])] = {
                 "rotation": values[0:3],
                 "location": values[3:6],
                 "scale": values[6:9],
@@ -81,109 +97,280 @@ def parse_pose_file(filepath):
     return pose
 
 
-def get_first_material_image(armature):
-    # Prioritize meshes skinned to this armature; fall back to any selected mesh.
-    meshes = []
-    for obj in bpy.context.scene.objects:
-        if obj.type != "MESH":
+def write_bmp24(image, filepath, max_edge=MAX_TEXTURE_EDGE):
+    """Write a guaranteed uncompressed 24-bit BMP that the Vita loader supports."""
+    preview = image.copy()
+    try:
+        width, height = int(preview.size[0]), int(preview.size[1])
+        if width < 1 or height < 1:
+            raise ValueError("Texture has no pixel data")
+        factor = min(1.0, float(max_edge) / float(max(width, height)))
+        out_width = max(1, int(round(width * factor)))
+        out_height = max(1, int(round(height * factor)))
+        if out_width != width or out_height != height:
+            preview.scale(out_width, out_height)
+            width, height = out_width, out_height
+
+        rgba = list(preview.pixels[:])
+        if len(rgba) < width * height * 4:
+            raise ValueError("Texture pixel buffer is incomplete")
+        row_stride = (width * 3 + 3) & ~3
+        image_size = row_stride * height
+        file_size = 54 + image_size
+        header = bytearray()
+        header.extend(b"BM")
+        header.extend(struct.pack("<IHHI", file_size, 0, 0, 54))
+        header.extend(struct.pack("<IiiHHIIiiII",
+                                  40, width, height, 1, 24, 0, image_size,
+                                  2835, 2835, 0, 0))
+
+        def srgb(channel):
+            channel = max(0.0, min(1.0, float(channel)))
+            if channel <= 0.0031308:
+                result = channel * 12.92
+            else:
+                result = 1.055 * (channel ** (1.0 / 2.4)) - 0.055
+            return max(0, min(255, int(round(result * 255.0))))
+
+        with open(filepath, "wb") as stream:
+            stream.write(header)
+            for y in range(height - 1, -1, -1):
+                row = bytearray()
+                base = y * width * 4
+                for x in range(width):
+                    index = base + x * 4
+                    r = srgb(rgba[index])
+                    g = srgb(rgba[index + 1])
+                    b = srgb(rgba[index + 2])
+                    row.extend((b, g, r))
+                row.extend(b"\0" * (row_stride - len(row)))
+                stream.write(row)
+    finally:
+        bpy.data.images.remove(preview)
+
+
+def find_material_image(mesh_obj):
+    for slot in mesh_obj.material_slots:
+        material = slot.material
+        if not material or not material.use_nodes or not material.node_tree:
             continue
-        linked_armature = obj.find_armature()
-        if linked_armature == armature or obj.parent == armature:
-            meshes.append(obj)
-
-    if not meshes:
-        meshes = [obj for obj in bpy.context.selected_objects if obj.type == "MESH"]
-
-    for mesh in meshes:
-        for slot in mesh.material_slots:
-            material = slot.material
-            if not material or not material.use_nodes or not material.node_tree:
-                continue
-            for node in material.node_tree.nodes:
-                if node.type == "TEX_IMAGE" and node.image:
-                    image = node.image
-                    if image.source == "FILE" and image.size[0] > 0 and image.size[1] > 0:
-                        return image
+        # Prefer the image feeding a Principled BSDF's Base Color.
+        principled_nodes = [node for node in material.node_tree.nodes
+                            if node.type == "BSDF_PRINCIPLED"]
+        preferred = []
+        for principled in principled_nodes:
+            socket = principled.inputs.get("Base Color")
+            if socket and socket.is_linked:
+                for link in socket.links:
+                    if link.from_node.type == "TEX_IMAGE" and link.from_node.image:
+                        preferred.append(link.from_node.image)
+        if preferred:
+            return preferred[0]
+        for node in material.node_tree.nodes:
+            if node.type == "TEX_IMAGE" and node.image:
+                return node.image
     return None
 
 
-def save_texture_preview(armature, filepath):
-    image = get_first_material_image(armature)
-    if image is None:
-        return False
+def normalized_weights(mesh_obj, vertex, bone_index, fallback_index):
+    candidates = []
+    for membership in vertex.groups:
+        if membership.group >= len(mesh_obj.vertex_groups):
+            continue
+        name = mesh_obj.vertex_groups[membership.group].name
+        index = bone_index.get(name)
+        weight = float(membership.weight)
+        if index is not None and weight > 0.00001:
+            candidates.append((index, weight))
+    candidates.sort(key=lambda pair: pair[1], reverse=True)
+    candidates = candidates[:4]
+    total = sum(weight for _, weight in candidates)
+    if total <= 0.00001:
+        if fallback_index is None:
+            return []
+        return [(fallback_index, 1.0)]
+    return [(index, weight / total) for index, weight in candidates]
 
-    old_path = image.filepath_raw
-    old_format = image.file_format
-    try:
-        image.filepath_raw = filepath
-        image.file_format = "PNG"
-        image.save()
-    finally:
-        image.filepath_raw = old_path
-        image.file_format = old_format
-    return os.path.isfile(filepath) and os.path.getsize(filepath) > 0
+
+def matrix_column_major(matrix):
+    return [float(matrix[row][col]) for col in range(4) for row in range(4)]
+
+
+def write_vlmesh(filepath, armature, mesh_obj, export_texture):
+    if len(armature.data.bones) > MAX_BONES:
+        raise ValueError("Vlender alpha currently supports at most %d bones" % MAX_BONES)
+
+    mesh = mesh_obj.data
+    mesh.calc_loop_triangles()
+    corner_count = len(mesh.loop_triangles) * 3
+    if corner_count < 3:
+        raise ValueError("Mesh has no triangles")
+    if corner_count > MAX_TRIANGLE_CORNERS:
+        raise ValueError(
+            "Mesh has %d triangle corners; the Vita alpha limit is %d. Decimate the mesh first."
+            % (corner_count, MAX_TRIANGLE_CORNERS)
+        )
+
+    armature_data_bones = list(armature.data.bones)
+    bone_index = {bone.name: index for index, bone in enumerate(armature_data_bones)}
+    fallback_index = 0 if armature_data_bones else None
+    pose_by_name = {bone.name: bone for bone in armature.pose.bones}
+    object_to_armature = armature.matrix_world.inverted() @ mesh_obj.matrix_world
+    normal_matrix = object_to_armature.to_3x3().inverted().transposed()
+    uv_layer = mesh.uv_layers.active
+
+    parent_indices = []
+    for bone in armature_data_bones:
+        parent_indices.append(bone_index.get(bone.parent.name, -1) if bone.parent else -1)
+
+    base_dir = os.path.dirname(os.path.abspath(filepath))
+    texture_path = os.path.join(base_dir, "texture.bmp")
+    texture_written = False
+    if export_texture:
+        image = find_material_image(mesh_obj)
+        if image:
+            try:
+                write_bmp24(image, texture_path)
+                texture_written = os.path.isfile(texture_path) and os.path.getsize(texture_path) > 54
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise ValueError("Could not export the base-colour image: %s" % exc) from exc
+
+    corner_count_written = 0
+    with open(filepath, "w", encoding="utf-8", newline="\n") as stream:
+        stream.write(MESH_HEADER + "\n")
+        stream.write("# B name parent head_local_xyz tail_local_xyz rest_matrix_col_major16 basis_loc_xyz basis_euler_xyz basis_scale_xyz\n")
+        stream.write("# V position_xyz normal_xyz uv_xy influence_count then (bone_index weight) pairs\n")
+        stream.write("T texture.bmp\n" if texture_written else "# No exported texture; install a texture.bmp beside this file if desired.\n")
+
+        for index, bone in enumerate(armature_data_bones):
+            rest = bone.matrix_local.copy()
+            inverse_rest = rest.inverted()
+            head_local = inverse_rest @ bone.head_local
+            tail_local = inverse_rest @ bone.tail_local
+            pose_bone = pose_by_name.get(bone.name)
+            if pose_bone:
+                loc, quat, scale = pose_bone.matrix_basis.decompose()
+                rotation = quat.to_euler("XYZ")
+            else:
+                loc = (0.0, 0.0, 0.0)
+                rotation = (0.0, 0.0, 0.0)
+                scale = (1.0, 1.0, 1.0)
+            values = [
+                parent_indices[index],
+                head_local.x, head_local.y, head_local.z,
+                tail_local.x, tail_local.y, tail_local.z,
+                *matrix_column_major(rest),
+                loc.x, loc.y, loc.z,
+                rotation.x, rotation.y, rotation.z,
+                scale.x, scale.y, scale.z,
+            ]
+            stream.write("B %s %d %s\n" % (
+                encode_name(bone.name), parent_indices[index],
+                " ".join("%.7f" % float(value) for value in values[1:])
+            ))
+
+        for triangle in mesh.loop_triangles:
+            for vertex_index, loop_index in zip(triangle.vertices, triangle.loops):
+                vertex = mesh.vertices[vertex_index]
+                position = object_to_armature @ vertex.co
+                normal = normal_matrix @ vertex.normal
+                if normal.length > 0.000001:
+                    normal.normalize()
+                else:
+                    normal = (0.0, 0.0, 1.0)
+                uv = uv_layer.data[loop_index].uv if uv_layer else (0.0, 0.0)
+                influences = normalized_weights(mesh_obj, vertex, bone_index, fallback_index)
+                values = [
+                    position.x, position.y, position.z,
+                    normal.x, normal.y, normal.z,
+                    float(uv[0]), float(uv[1]),
+                    float(len(influences)),
+                ]
+                values.extend(value for pair in influences for value in pair)
+                stream.write("V %s\n" % " ".join("%.7f" % float(value) for value in values))
+                corner_count_written += 1
+
+    return corner_count_written, texture_written
+
+
+class EXPORT_SCENE_OT_vlender_project(bpy.types.Operator, ExportHelper):
+    """Export one armature-skinned mesh, its UVs, texture preview, and skeleton for Vlender"""
+    bl_idname = "export_scene.vlender_project"
+    bl_label = "Export Vlender 3D Project"
+    bl_options = {"PRESET"}
+
+    filename_ext = ".vlmesh"
+    filter_glob: StringProperty(default="*.vlmesh", options={"HIDDEN"})
+    export_texture: BoolProperty(
+        name="Export base-colour texture",
+        description="Write texture.bmp beside the project when an image texture can be found",
+        default=True,
+    )
+
+    def execute(self, context):
+        armature = find_armature(context)
+        if armature is None:
+            self.report({"ERROR"}, "Select an armature or a mesh linked to an armature.")
+            return {"CANCELLED"}
+        mesh_obj = find_mesh_for_armature(context, armature)
+        if mesh_obj is None:
+            self.report({"ERROR"}, "No mesh linked to the selected armature was found.")
+            return {"CANCELLED"}
+        try:
+            corners, texture_written = write_vlmesh(
+                self.filepath, armature, mesh_obj, self.export_texture
+            )
+        except (OSError, RuntimeError, ValueError, OverflowError) as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        message = "Exported %d triangle corners and %d bones" % (
+            corners, len(armature.data.bones)
+        )
+        message += "; texture.bmp included" if texture_written else "; no image texture included"
+        self.report({"INFO"}, message)
+        return {"FINISHED"}
 
 
 class EXPORT_SCENE_OT_vlender_pose(bpy.types.Operator, ExportHelper):
-    """Export pose transforms for editing in Vlender on the PS Vita"""
+    """Export pose transforms to a Vlender .vlpose file"""
     bl_idname = "export_scene.vlender_pose"
     bl_label = "Export Vlender Pose"
     bl_options = {"PRESET"}
 
     filename_ext = ".vlpose"
     filter_glob: StringProperty(default="*.vlpose", options={"HIDDEN"})
-    export_texture_preview: BoolProperty(
-        name="Export texture preview",
-        description="Write the first image texture found on a mesh using this armature to preview.png",
-        default=True,
-    )
 
     def execute(self, context):
         armature = find_armature(context)
         if not armature:
             self.report({"ERROR"}, "Select an armature, or a mesh linked to an armature.")
             return {"CANCELLED"}
-
         try:
             with open(self.filepath, "w", encoding="utf-8", newline="\n") as stream:
                 stream.write(POSE_HEADER + "\n")
                 stream.write("# B name_percent_encoded rx ry rz lx ly lz sx sy sz\n")
                 for pose_bone in armature.pose.bones:
-                    # matrix_basis gives the local pose transform relative to the rest bone/parent.
                     basis = pose_bone.matrix_basis.copy()
-                    rotation = basis.to_euler("XYZ")
-                    location = pose_bone.location
-                    scale = pose_bone.scale
+                    location, quaternion, scale = basis.decompose()
+                    rotation = quaternion.to_euler("XYZ")
                     values = (
                         rotation.x, rotation.y, rotation.z,
                         location.x, location.y, location.z,
                         scale.x, scale.y, scale.z,
                     )
-                    encoded = encode_bone_name(pose_bone.name)
                     stream.write("B %s %s\n" % (
-                        encoded,
+                        encode_name(pose_bone.name),
                         " ".join("%.7f" % value for value in values),
                     ))
         except (OSError, RuntimeError, ValueError) as exc:
             self.report({"ERROR"}, "Could not export pose: %s" % exc)
             return {"CANCELLED"}
-
-        preview_path = os.path.join(os.path.dirname(self.filepath), "preview.png")
-        if self.export_texture_preview:
-            try:
-                if save_texture_preview(armature, preview_path):
-                    self.report({"INFO"}, "Pose and preview.png exported.")
-                else:
-                    self.report({"INFO"}, "Pose exported; no usable image texture was found.")
-            except (OSError, RuntimeError, ValueError) as exc:
-                self.report({"WARNING"}, "Pose exported, but texture preview failed: %s" % exc)
-        else:
-            self.report({"INFO"}, "Vlender pose exported.")
+        self.report({"INFO"}, "Vlender pose exported.")
         return {"FINISHED"}
 
 
 class IMPORT_SCENE_OT_vlender_pose(bpy.types.Operator, ImportHelper):
-    """Apply a Vlender pose file to the matching armature bones"""
+    """Apply a Vlender pose to matching bones in the selected armature"""
     bl_idname = "import_scene.vlender_pose"
     bl_label = "Import Vlender Pose"
 
@@ -195,7 +382,6 @@ class IMPORT_SCENE_OT_vlender_pose(bpy.types.Operator, ImportHelper):
         if not armature:
             self.report({"ERROR"}, "Select an armature, or a mesh linked to an armature.")
             return {"CANCELLED"}
-
         try:
             pose = parse_pose_file(self.filepath)
         except (OSError, ValueError) as exc:
@@ -216,10 +402,7 @@ class IMPORT_SCENE_OT_vlender_pose(bpy.types.Operator, ImportHelper):
             applied += 1
 
         context.view_layer.update()
-        self.report(
-            {"INFO"},
-            "Applied %d bone(s); %d unmatched bone name(s) skipped." % (applied, missing),
-        )
+        self.report({"INFO"}, "Applied %d bones; skipped %d unmatched names." % (applied, missing))
         return {"FINISHED"}
 
 
@@ -232,21 +415,31 @@ class VIEW3D_PT_vlender_bridge(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text="PS Vita pose bridge", icon="ARMATURE_DATA")
+        layout.label(text="PS Vita 3D editor bridge", icon="ARMATURE_DATA")
+        layout.operator("export_scene.vlender_project", icon="EXPORT")
         layout.operator("export_scene.vlender_pose", icon="EXPORT")
         layout.operator("import_scene.vlender_pose", icon="IMPORT")
-        layout.label(text="Exports transforms, not mesh geometry.")
-        layout.label(text="Texture export is a separate image preview.")
+        layout.separator()
+        layout.label(text="One mesh + armature per project")
+        layout.label(text="Texture maps are exported as BMP")
+        layout.label(text="The original .blend stays untouched")
 
 
-def menu_export(self, context):
+def menu_export_project(self, context):
+    self.layout.operator(
+        EXPORT_SCENE_OT_vlender_project.bl_idname,
+        text="Vlender 3D Project (.vlmesh)",
+    )
+
+
+def menu_export_pose(self, context):
     self.layout.operator(
         EXPORT_SCENE_OT_vlender_pose.bl_idname,
         text="Vlender Pose (.vlpose)",
     )
 
 
-def menu_import(self, context):
+def menu_import_pose(self, context):
     self.layout.operator(
         IMPORT_SCENE_OT_vlender_pose.bl_idname,
         text="Vlender Pose (.vlpose)",
@@ -254,6 +447,7 @@ def menu_import(self, context):
 
 
 CLASSES = (
+    EXPORT_SCENE_OT_vlender_project,
     EXPORT_SCENE_OT_vlender_pose,
     IMPORT_SCENE_OT_vlender_pose,
     VIEW3D_PT_vlender_bridge,
@@ -263,13 +457,15 @@ CLASSES = (
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
-    bpy.types.TOPBAR_MT_file_export.append(menu_export)
-    bpy.types.TOPBAR_MT_file_import.append(menu_import)
+    bpy.types.TOPBAR_MT_file_export.append(menu_export_project)
+    bpy.types.TOPBAR_MT_file_export.append(menu_export_pose)
+    bpy.types.TOPBAR_MT_file_import.append(menu_import_pose)
 
 
 def unregister():
-    bpy.types.TOPBAR_MT_file_export.remove(menu_export)
-    bpy.types.TOPBAR_MT_file_import.remove(menu_import)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_export_project)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_export_pose)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_import_pose)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 

@@ -6,16 +6,37 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      app_name:
+        description: "Name displayed on the Vita LiveArea"
+        type: string
+        required: false
+        default: "Vlender"
+      icon_path:
+        description: "Optional repo-relative 128x128 PNG icon path (blank uses generated default)"
+        type: string
+        required: false
+        default: ""
+      banner_path:
+        description: "Optional repo-relative 840x500 PNG LiveArea banner path (blank uses generated default)"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
   build-vpk:
-    name: Build Vita homebrew
+    name: Build Vlender 3D editor
     runs-on: ubuntu-24.04
     container:
       image: vitasdk/vitasdk:2026.08
+    env:
+      APP_NAME: '${{ inputs.app_name }}'
+      CUSTOM_ICON_PATH: '${{ inputs.icon_path }}'
+      CUSTOM_BANNER_PATH: '${{ inputs.banner_path }}'
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -26,18 +47,43 @@ jobs:
           test -f "$VITASDK/share/vita.toolchain.cmake"
           command -v arm-vita-eabi-gcc
 
-      - name: Ensure libvita2d is installed
-        run: vdpm install libvita2d
+      - name: Install vitaGL and its dependencies
+        run: vdpm install vitaGL
+
+      - name: Generate default icon and LiveArea banner
+        run: python3 tools/generate_branding.py
+
+      - name: Apply optional custom icon and banner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${CUSTOM_ICON_PATH:-}" ]]; then
+            python3 tools/validate_png.py "$CUSTOM_ICON_PATH" 128 128
+            cp "$CUSTOM_ICON_PATH" assets/branding/icon0.png
+            echo "Using custom icon: $CUSTOM_ICON_PATH"
+          fi
+          if [[ -n "${CUSTOM_BANNER_PATH:-}" ]]; then
+            python3 tools/validate_png.py "$CUSTOM_BANNER_PATH" 840 500
+            cp "$CUSTOM_BANNER_PATH" assets/branding/livearea/bg.png
+            echo "Using custom LiveArea banner: $CUSTOM_BANNER_PATH"
+          fi
 
       - name: Check Blender add-on syntax
         run: python3 -m py_compile blender_addon/vlender_bridge.py
 
+      - name: Check branding generator syntax
+        run: python3 -m py_compile tools/generate_branding.py tools/validate_png.py
+
       - name: Configure
-        run: >
-          cmake -S . -B build
-          -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
-          -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_VERBOSE_MAKEFILE=ON
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME="${APP_NAME:-Vlender}"
+          cmake -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_VERBOSE_MAKEFILE=ON \
+            "-DVITA_APP_NAME=$APP_NAME"
 
       - name: Link executable and inspect ELF segments
         run: |
