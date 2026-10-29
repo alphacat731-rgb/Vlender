@@ -13,6 +13,7 @@
 #include <math.h>
 
 #include "model.h"
+#include "font_atlas.h"
 
 #define SCREEN_W 960
 #define SCREEN_H 544
@@ -29,7 +30,12 @@ typedef struct { float x, y, z; } Vec3;
 
 static VLModel g_model;
 static GLuint g_texture = 0;
+static GLuint g_font_texture = 0;
+static unsigned char g_font_rle_decoded[12000];
+static unsigned char g_font_atlas_pixels[VL_FONT_RAW_SIZE];
 static int g_pose_mode = 1;
+static int g_show_grid = 1;
+static int g_show_skeleton = 1;
 static int g_transform_tool = 2; /* 0 select, 1 move, 2 rotate, 3 scale */
 static int g_selected_bone = 0;
 static int g_active_axis = 2;
@@ -46,70 +52,6 @@ static float g_camera_elevation = -62.0f;
 static float g_camera_distance = 5.0f;
 static char g_status[128] = "EXPORT A MODEL FROM BLENDER TO ux0:data/VLENDER/";
 static int g_frame = 1;
-
-/* Compact 5x7 font: digits 0-9 followed by A-Z, then punctuation. */
-static const unsigned char g_font36[36][7] = {
-    {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14}, {14,17,1,2,4,8,31},
-    {30,1,1,14,1,1,30}, {2,6,10,18,31,2,2}, {31,16,16,30,1,1,30},
-    {6,8,16,30,17,17,14}, {31,1,2,4,8,8,8}, {14,17,17,14,17,17,14},
-    {14,17,17,15,1,2,12},
-    {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30},
-    {14,17,16,16,16,17,14}, {28,18,17,17,17,18,28},
-    {31,16,16,30,16,16,31}, {31,16,16,30,16,16,16},
-    {14,17,16,23,17,17,15}, {17,17,17,31,17,17,17},
-    {14,4,4,4,4,4,14}, {7,2,2,2,18,18,12},
-    {17,18,20,24,20,18,17}, {16,16,16,16,16,16,31},
-    {17,27,21,21,17,17,17}, {17,25,21,19,17,17,17},
-    {14,17,17,17,17,17,14}, {30,17,17,30,16,16,16},
-    {14,17,17,17,21,18,13}, {30,17,17,30,20,18,17},
-    {15,16,16,14,1,1,30}, {31,4,4,4,4,4,4},
-    {17,17,17,17,17,17,14}, {17,17,17,17,17,10,4},
-    {17,17,17,21,21,21,10}, {17,17,10,4,10,17,17},
-    {17,17,10,4,4,4,4}, {31,1,2,4,8,16,31}
-};
-
-static const unsigned char *glyph_rows(char c, const unsigned char **special) {
-    static const unsigned char space[7] = {0,0,0,0,0,0,0};
-    static const unsigned char dash[7] = {0,0,0,31,0,0,0};
-    static const unsigned char underscore[7] = {0,0,0,0,0,0,31};
-    static const unsigned char dot[7] = {0,0,0,0,0,12,12};
-    static const unsigned char colon[7] = {0,12,12,0,12,12,0};
-    static const unsigned char slash[7] = {1,2,2,4,8,8,16};
-    static const unsigned char plus[7] = {0,4,4,31,4,4,0};
-    static const unsigned char equal[7] = {0,0,31,0,31,0,0};
-    static const unsigned char less[7] = {2,4,8,16,8,4,2};
-    static const unsigned char greater[7] = {8,4,2,1,2,4,8};
-    static const unsigned char question[7] = {14,17,1,2,4,0,4};
-    static const unsigned char leftbracket[7] = {14,8,8,8,8,8,14};
-    static const unsigned char rightbracket[7] = {14,2,2,2,2,2,14};
-    static const unsigned char pipe[7] = {4,4,4,4,4,4,4};
-    static const unsigned char percent[7] = {17,2,4,8,16,17,0};
-    static const unsigned char star[7] = {0,21,14,31,14,21,0};
-    static const unsigned char asterisk[7] = {0,4,21,14,21,4,0};
-    *special = space;
-    if (c >= '0' && c <= '9') return g_font36[c - '0'];
-    if (c >= 'A' && c <= 'Z') return g_font36[10 + c - 'A'];
-    switch (c) {
-        case '-': *special = dash; break;
-        case '_': *special = underscore; break;
-        case '.': *special = dot; break;
-        case ':': *special = colon; break;
-        case '/': *special = slash; break;
-        case '+': *special = plus; break;
-        case '=': *special = equal; break;
-        case '<': *special = less; break;
-        case '>': *special = greater; break;
-        case '?': *special = question; break;
-        case '[': *special = leftbracket; break;
-        case ']': *special = rightbracket; break;
-        case '|': *special = pipe; break;
-        case '%': *special = percent; break;
-        case '*': *special = star; break;
-        case '\'': *special = asterisk; break;
-        default: *special = space; break;
-    }
-    return *special;
-}
 
 static void set_color(float r, float g, float b) {
     glColor4f(r, g, b, 1.0f);
@@ -130,35 +72,143 @@ static void line2d(float x1, float y1, float x2, float y2, float r, float g, flo
     glEnd();
 }
 
+static int base64_value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static size_t decode_base64(const char *src, unsigned char *dst, size_t capacity) {
+    size_t written = 0;
+    unsigned int accumulator = 0;
+    int bits = 0;
+    while (*src && *src != '=') {
+        int value = base64_value(*src++);
+        if (value < 0) continue;
+        accumulator = (accumulator << 6) | (unsigned int)value;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (written >= capacity) return 0;
+            dst[written++] = (unsigned char)((accumulator >> bits) & 0xffu);
+            accumulator &= bits ? ((1u << bits) - 1u) : 0u;
+        }
+    }
+    return written;
+}
+
+static int font_init(void) {
+    size_t encoded_size;
+    size_t in = 0, out = 0;
+    int y;
+    unsigned char row[VL_FONT_ATLAS_W];
+
+    encoded_size = decode_base64(g_font_atlas_rle_b64, g_font_rle_decoded,
+                                 sizeof(g_font_rle_decoded));
+    if (encoded_size < 2 || (encoded_size & 1u) != 0u) return 0;
+    while (in + 1 < encoded_size) {
+        size_t run = g_font_rle_decoded[in++];
+        unsigned char value = g_font_rle_decoded[in++];
+        if (run == 0 || out + run > VL_FONT_RAW_SIZE) return 0;
+        memset(g_font_atlas_pixels + out, value, run);
+        out += run;
+    }
+    if (out != VL_FONT_RAW_SIZE) return 0;
+
+    /* OpenGL's first texture row is the bottom row; flip the top-down raster. */
+    for (y = 0; y < VL_FONT_ATLAS_H / 2; ++y) {
+        unsigned char *top = g_font_atlas_pixels + (size_t)y * VL_FONT_ATLAS_W;
+        unsigned char *bottom = g_font_atlas_pixels +
+            (size_t)(VL_FONT_ATLAS_H - 1 - y) * VL_FONT_ATLAS_W;
+        memcpy(row, top, sizeof(row));
+        memcpy(top, bottom, sizeof(row));
+        memcpy(bottom, row, sizeof(row));
+    }
+
+    glGenTextures(1, &g_font_texture);
+    glBindTexture(GL_TEXTURE_2D, g_font_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, VL_FONT_ATLAS_W,
+                 VL_FONT_ATLAS_H, 0, GL_ALPHA, GL_UNSIGNED_BYTE,
+                 g_font_atlas_pixels);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return g_font_texture != 0;
+}
+
+static void font_shutdown(void) {
+    if (g_font_texture) {
+        GLuint old = g_font_texture;
+        glDeleteTextures(1, &old);
+        g_font_texture = 0;
+    }
+}
+
+static float text_width(float scale, const char *text) {
+    float width = 0.0f;
+    const float font_scale = scale * 0.78f;
+    if (!text) return 0.0f;
+    while (*text) {
+        int code = (unsigned char)*text++;
+        if (code < VL_FONT_FIRST || code >= VL_FONT_FIRST + VL_FONT_COUNT - 1) code = '?';
+        width += (float)g_font_glyphs[code - VL_FONT_FIRST].advance_x4 * 0.25f * font_scale;
+    }
+    return width;
+}
+
 static void text2d(float x, float y, float scale, float r, float g, float b, const char *text) {
     float cursor = x;
-    if (!text) return;
-    set_color(r,g,b);
+    const float font_scale = scale * 0.78f;
+    if (!text || !g_font_texture) return;
+
+    set_color(r, g, b);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, g_font_texture);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     glBegin(GL_QUADS);
     for (; *text; ++text) {
-        const unsigned char *rows = NULL;
-        const unsigned char *pattern = glyph_rows((char)toupper((unsigned char)*text), &rows);
-        int row, col;
-        for (row = 0; row < 7; ++row) {
-            for (col = 0; col < 5; ++col) {
-                if ((pattern[row] & (1 << (4 - col))) != 0) {
-                    float px = cursor + (float)col * scale;
-                    float py = y + (float)row * scale;
-                    glVertex2f(px, py);
-                    glVertex2f(px + scale, py);
-                    glVertex2f(px + scale, py + scale);
-                    glVertex2f(px, py + scale);
-                }
-            }
+        int code = (unsigned char)*text;
+        const VLFontGlyph *glyph;
+        int index, cell_x, cell_y, source_y;
+        float u0, u1, v0, v1, gx, gy, gw, gh;
+        if (code < VL_FONT_FIRST || code >= VL_FONT_FIRST + VL_FONT_COUNT - 1) code = '?';
+        index = code - VL_FONT_FIRST;
+        glyph = &g_font_glyphs[index];
+        if (glyph->width && glyph->height) {
+            cell_x = (index % VL_FONT_COLS) * VL_FONT_CELL_W;
+            cell_y = (index / VL_FONT_COLS) * VL_FONT_CELL_H;
+            source_y = cell_y + glyph->top + 4;
+            u0 = (float)(cell_x + 2) / (float)VL_FONT_ATLAS_W;
+            u1 = (float)(cell_x + 2 + glyph->width) / (float)VL_FONT_ATLAS_W;
+            v0 = 1.0f - (float)source_y / (float)VL_FONT_ATLAS_H;
+            v1 = 1.0f - (float)(source_y + glyph->height) / (float)VL_FONT_ATLAS_H;
+            gx = cursor + (float)glyph->left * font_scale;
+            gy = y + (float)glyph->top * font_scale;
+            gw = (float)glyph->width * font_scale;
+            gh = (float)glyph->height * font_scale;
+            glTexCoord2f(u0, v0); glVertex2f(gx, gy);
+            glTexCoord2f(u1, v0); glVertex2f(gx + gw, gy);
+            glTexCoord2f(u1, v1); glVertex2f(gx + gw, gy + gh);
+            glTexCoord2f(u0, v1); glVertex2f(gx, gy + gh);
         }
-        cursor += 6.0f * scale;
+        cursor += (float)glyph->advance_x4 * 0.25f * font_scale;
     }
     glEnd();
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_BLEND);
 }
 
 static void centered_text(float center_x, float y, float scale, float r, float g, float b, const char *text) {
-    size_t len = text ? strlen(text) : 0;
-    float width = (float)len * 6.0f * scale;
+    float width = text_width(scale, text);
     text2d(center_x - width * 0.5f, y, scale, r, g, b, text);
 }
 
@@ -177,7 +227,7 @@ enum {
     ICON_SELECT = 0, ICON_MOVE, ICON_ROTATE, ICON_SCALE,
     ICON_LAYOUT, ICON_POSE, ICON_OBJECT, ICON_OPEN,
     ICON_LOAD, ICON_SAVE, ICON_MODE, ICON_MINUS,
-    ICON_PLUS, ICON_RESET
+    ICON_PLUS, ICON_RESET, ICON_FIT, ICON_GRID, ICON_BONES
 };
 
 static void icon_line(float ox, float oy, float s,
@@ -322,6 +372,32 @@ static void draw_icon2d(int icon, float x, float y, float size,
             icon_circle(x,y,s,12,12,7.5f,r,g,b);
             icon_line(x,y,s,12,3,18,4,r,g,b);
             icon_line(x,y,s,18,4,17,9,r,g,b);
+            break;
+        case ICON_FIT:
+            icon_line(x,y,s,3,8,3,3,r,g,b);
+            icon_line(x,y,s,3,3,8,3,r,g,b);
+            icon_line(x,y,s,16,3,21,3,r,g,b);
+            icon_line(x,y,s,21,3,21,8,r,g,b);
+            icon_line(x,y,s,3,16,3,21,r,g,b);
+            icon_line(x,y,s,3,21,8,21,r,g,b);
+            icon_line(x,y,s,16,21,21,21,r,g,b);
+            icon_line(x,y,s,21,21,21,16,r,g,b);
+            icon_line(x,y,s,8,8,16,16,r,g,b);
+            icon_line(x,y,s,16,8,8,16,r,g,b);
+            break;
+        case ICON_GRID:
+            icon_rect(x,y,s,3,3,18,18,r,g,b);
+            icon_line(x,y,s,9,3,9,21,r,g,b);
+            icon_line(x,y,s,15,3,15,21,r,g,b);
+            icon_line(x,y,s,3,9,21,9,r,g,b);
+            icon_line(x,y,s,3,15,21,15,r,g,b);
+            break;
+        case ICON_BONES:
+            icon_circle(x,y,s,6,4,2.2f,r,g,b);
+            icon_circle(x,y,s,18,10,2.2f,r,g,b);
+            icon_circle(x,y,s,8,20,2.2f,r,g,b);
+            icon_line(x,y,s,7.8f,5.2f,16.2f,8.8f,r,g,b);
+            icon_line(x,y,s,16.6f,12.0f,9.4f,18.0f,r,g,b);
             break;
         default:
             break;
@@ -703,7 +779,7 @@ static void draw_model_mesh(void) {
 
 static void draw_skeleton(void) {
     int i;
-    if (!g_model.loaded || !g_pose_mode || g_model.bone_count == 0) return;
+    if (!g_model.loaded || !g_pose_mode || !g_show_skeleton || g_model.bone_count == 0) return;
     glDisable(GL_TEXTURE_2D);
     glLineWidth(2.0f);
     glBegin(GL_LINES);
@@ -742,9 +818,9 @@ static void render_3d_view(void) {
     glRotatef(g_camera_azimuth,0.0f,0.0f,1.0f);
     glTranslatef(-center_x,-center_y,-center_z);
 
-    draw_grid();
+    if (g_show_grid) draw_grid();
     draw_model_mesh();
-    draw_skeleton();
+    if (g_show_skeleton) draw_skeleton();
     glDisable(GL_DEPTH_TEST);
 }
 
@@ -757,6 +833,8 @@ static void draw_ui_panels(void) {
     rect2d(0,VIEW_Y,40,VIEW_H,0.09f,0.10f,0.12f);
     rect2d(680,VIEW_Y,280,166,0.095f,0.105f,0.12f);
     rect2d(680,222,280,196,0.095f,0.105f,0.12f);
+    rect2d(680,VIEW_Y,280,25,0.12f,0.135f,0.155f);
+    rect2d(680,222,280,25,0.12f,0.135f,0.155f);
     rect2d(0,420,SCREEN_W,75,0.09f,0.10f,0.12f);
     rect2d(0,495,SCREEN_W,49,0.07f,0.078f,0.09f);
     rect2d(680,VIEW_Y,280,1,0.24f,0.27f,0.31f);
@@ -856,10 +934,11 @@ static void draw_toolbar(void) {
     button_icon2d(4,101,32,32,ICON_MOVE,g_transform_tool==1);
     button_icon2d(4,140,32,32,ICON_ROTATE,g_transform_tool==2);
     button_icon2d(4,179,32,32,ICON_SCALE,g_transform_tool==3);
-    /* Tiny local axis/view glyph in place of the old two-line text label. */
-    icon_line(7,238,0.72f,5,11,19,11,0.46f,0.52f,0.58f);
-    icon_line(7,238,0.72f,12,4,12,18,0.46f,0.52f,0.58f);
-    icon_line(7,238,0.72f,12,11,19,4,0.46f,0.52f,0.58f);
+    text2d(7,218,0.75f,0.44f,0.50f,0.56f,"TOOLS");
+    button_icon2d(4,231,32,28,ICON_GRID,g_show_grid);
+    text2d(7,260,0.72f,0.44f,0.50f,0.56f,"GRID");
+    button_icon2d(4,280,32,28,ICON_BONES,g_show_skeleton);
+    text2d(5,309,0.72f,0.44f,0.50f,0.56f,"BONES");
 }
 
 static void draw_timeline(void) {
@@ -884,27 +963,39 @@ static void draw_timeline(void) {
 }
 
 static void draw_ui_overlay(void) {
+    char stats[80];
     begin_2d();
     text2d(13,13,1.8f,0.53f,1.0f,0.45f,"VLENDER");
-    text2d(126,18,1.0f,0.53f,0.59f,0.64f,"3D STUDIO");
-    button_icon2d(250,9,34,28,ICON_LAYOUT,1);
-    button_icon2d(290,9,34,28,ICON_POSE,g_pose_mode);
-    button_icon2d(330,9,34,28,ICON_OBJECT,!g_pose_mode);
-    button_icon2d(791,9,34,28,ICON_OPEN,0);
-    button_icon2d(830,9,34,28,ICON_LOAD,0);
-    button_icon2d(869,9,34,28,ICON_SAVE,0);
+    text2d(91,18,0.9f,0.53f,0.59f,0.64f,"3D STUDIO");
+    text2d(157,17,0.82f,0.82f,0.85f,0.88f,"File");
+    text2d(192,17,0.82f,0.82f,0.85f,0.88f,"Edit");
+    text2d(228,17,0.82f,0.82f,0.85f,0.88f,"Render");
+    text2d(273,17,0.82f,0.82f,0.85f,0.88f,"Window");
+    text2d(324,17,0.82f,0.82f,0.85f,0.88f,"Help");
+    button_icon2d(405,9,34,28,ICON_LAYOUT,1);
+    button_icon2d(445,9,34,28,ICON_POSE,g_pose_mode);
+    button_icon2d(485,9,34,28,ICON_OBJECT,!g_pose_mode);
+    button_icon2d(748,9,34,28,ICON_FIT,0);
+    button_icon2d(788,9,34,28,ICON_OPEN,0);
+    button_icon2d(828,9,34,28,ICON_LOAD,0);
+    button_icon2d(868,9,34,28,ICON_SAVE,0);
     button_icon2d(908,9,38,28,ICON_MODE,g_pose_mode);
     draw_toolbar();
     draw_outliner();
     draw_properties();
     draw_timeline();
     text2d(12,510,0.95f,0.75f,0.80f,0.84f,g_status);
-    text2d(12,528,0.9f,0.42f,0.49f,0.55f,"D-PAD SELECT / LEFT-RIGHT ROTATE / CROSS AXIS / START EXIT");
+    text2d(12,528,0.9f,0.42f,0.49f,0.55f,"D-PAD SELECT / LEFT-RIGHT ADJUST / CROSS AXIS / SELECT VIEW / START EXIT");
     text2d(692,528,0.9f,0.42f,0.49f,0.55f,"TOUCH: ORBIT / SELECT / ADJUST");
     text2d(56,61,0.95f,0.80f,0.84f,0.87f,g_model.loaded ? "MESH WORKSPACE" : "NO PROJECT LOADED");
-    if (!g_model.loaded) centered_text(VIEW_X + VIEW_W*0.5f, VIEW_Y + VIEW_H*0.5f - 5.0f,
-                                              1.4f,0.88f,0.91f,0.92f,"3D VIEWPORT READY");
-    /* Small XYZ viewport gizmo */
+    if (g_model.loaded) {
+        snprintf(stats,sizeof(stats),"VERTS %d  TRIS %d  BONES %d",
+                 g_model.vertex_count,g_model.vertex_count/3,g_model.bone_count);
+        text2d(350,61,0.72f,0.49f,0.75f,0.78f,stats);
+    } else {
+        centered_text(VIEW_X + VIEW_W*0.5f, VIEW_Y + VIEW_H*0.5f - 5.0f,
+                      1.4f,0.88f,0.91f,0.92f,"3D VIEWPORT READY");
+    }
     line2d(621,75,651,75,0.90f,0.30f,0.30f);
     line2d(621,75,621,103,0.30f,0.90f,0.44f);
     line2d(621,75,603,93,0.30f,0.62f,1.0f);
@@ -933,12 +1024,19 @@ static void set_slider_from_x(int x) {
 
 static void on_touch_press(int x, int y) {
     if (y < 45) {
-        if (x >= 791 && x < 827) load_project();
-        else if (x >= 830 && x < 866) load_pose();
-        else if (x >= 869 && x < 905) save_pose();
+        if (x >= 748 && x < 784) {
+            g_camera_azimuth = 32.0f;
+            g_camera_elevation = -62.0f;
+            g_camera_distance = g_model.loaded ? fmaxf(2.8f, g_model.radius * 3.8f) : 4.2f;
+            snprintf(g_status,sizeof(g_status),"%s","VIEWPORT CAMERA RESET");
+        }
+        else if (x >= 788 && x < 824) load_project();
+        else if (x >= 828 && x < 864) load_pose();
+        else if (x >= 868 && x < 904) save_pose();
         else if (x >= 908 && x < 948) g_pose_mode = !g_pose_mode;
-        else if (x >= 290 && x < 324) g_pose_mode = 1;
-        else if (x >= 330 && x < 364) g_pose_mode = 0;
+        else if (x >= 445 && x < 479) g_pose_mode = 1;
+        else if (x >= 485 && x < 519) g_pose_mode = 0;
+        else if (x >= 405 && x < 439) snprintf(g_status,sizeof(g_status),"%s","LAYOUT WORKSPACE");
         return;
     }
     if (x >= 4 && x <= 38) {
@@ -946,6 +1044,14 @@ static void on_touch_press(int x, int y) {
         else if (y >= 101 && y <= 133) g_transform_tool = 1;
         else if (y >= 140 && y <= 172) g_transform_tool = 2;
         else if (y >= 179 && y <= 211) g_transform_tool = 3;
+        else if (y >= 231 && y <= 259) {
+            g_show_grid = !g_show_grid;
+            snprintf(g_status,sizeof(g_status),"VIEWPORT GRID %s",g_show_grid ? "ON" : "OFF");
+        }
+        else if (y >= 280 && y <= 308) {
+            g_show_skeleton = !g_show_skeleton;
+            snprintf(g_status,sizeof(g_status),"SKELETON OVERLAY %s",g_show_skeleton ? "ON" : "OFF");
+        }
         return;
     }
     if (x >= 690 && x <= 952 && y >= 88 && y < 210) {
@@ -984,6 +1090,12 @@ static int update_input(void) {
     g_previous_buttons = (int)pad.buttons;
 
     if (pressed & SCE_CTRL_START) return 0;
+    if (pressed & SCE_CTRL_SELECT) {
+        g_camera_azimuth = 32.0f;
+        g_camera_elevation = -62.0f;
+        g_camera_distance = g_model.loaded ? fmaxf(2.8f, g_model.radius * 3.8f) : 4.2f;
+        snprintf(g_status,sizeof(g_status),"%s","VIEWPORT CAMERA RESET");
+    }
     if (g_model.loaded && g_model.bone_count > 0 && g_pose_mode) {
         if (pressed & SCE_CTRL_UP) select_bone(g_selected_bone - 1);
         if (pressed & SCE_CTRL_DOWN) select_bone(g_selected_bone + 1);
@@ -1049,6 +1161,9 @@ int main(void) {
 
     vglInit(0x800000);
     vglWaitVblankStart(GL_TRUE);
+    if (!font_init()) {
+        snprintf(g_status,sizeof(g_status),"%s","FONT ATLAS INIT FAILED");
+    }
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDisable(GL_CULL_FACE);
@@ -1065,6 +1180,7 @@ int main(void) {
     }
 
     if (g_texture) glDeleteTextures(1,&g_texture);
+    font_shutdown();
     vl_model_free(&g_model);
     sceKernelExitProcess(0);
     return 0;
