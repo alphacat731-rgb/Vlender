@@ -7,6 +7,7 @@
 #include <psp2/ctrl.h>
 #include <psp2/display.h>
 #include <psp2/io/fcntl.h>
+#include <psp2/io/dirent.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/touch.h>
 
