@@ -37,9 +37,15 @@ jobs:
           cmake -S . -B build
           -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_VERBOSE_MAKEFILE=ON
+
+      - name: Link executable and inspect ELF segments
+        run: |
+          cmake --build build --target Vlender --verbose
+          arm-vita-eabi-readelf -l build/Vlender
 
       - name: Build VPK
-        run: cmake --build build --parallel 2
+        run: cmake --build build --parallel 2 --verbose
 
       - name: Verify package exists
         run: test -s build/Vlender.vpk
