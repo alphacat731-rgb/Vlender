@@ -145,6 +145,27 @@ static int split_tokens(char *line, char **tokens, int max_tokens) {
     return count;
 }
 
+static int valid_float_token(const char *token) {
+    char *end = NULL;
+    float value;
+    if (!token || !*token) return 0;
+    errno = 0;
+    value = strtof(token, &end);
+    return end != token && end && *end == 0 &&
+           errno != ERANGE && isfinite(value);
+}
+
+static int valid_int_token(const char *token) {
+    char *end = NULL;
+    long value;
+    if (!token || !*token) return 0;
+    errno = 0;
+    value = strtol(token, &end, 10);
+    return end != token && end && *end == 0 &&
+           errno != ERANGE && value >= -2147483647L - 1L &&
+           value <= 2147483647L;
+}
+
 static float token_float(char **tokens, int index) {
     return strtof(tokens[index], NULL);
 }
