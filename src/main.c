@@ -53,6 +53,19 @@ static float g_camera_distance = 5.0f;
 static char g_status[128] = "EXPORT A MODEL FROM BLENDER TO ux0:data/VLENDER/";
 static int g_frame = 1;
 
+#define POSE_HISTORY_CAPACITY 24
+typedef struct {
+    int bone_index;
+    float location[3];
+    float rotation[3];
+    float scale[3];
+} PoseSnapshot;
+
+static PoseSnapshot g_undo_history[POSE_HISTORY_CAPACITY];
+static PoseSnapshot g_redo_history[POSE_HISTORY_CAPACITY];
+static int g_undo_count = 0;
+static int g_redo_count = 0;
+
 static void set_color(float r, float g, float b) {
     glColor4f(r, g, b, 1.0f);
 }
@@ -227,7 +240,8 @@ enum {
     ICON_SELECT = 0, ICON_MOVE, ICON_ROTATE, ICON_SCALE,
     ICON_LAYOUT, ICON_POSE, ICON_OBJECT, ICON_OPEN,
     ICON_LOAD, ICON_SAVE, ICON_MODE, ICON_MINUS,
-    ICON_PLUS, ICON_RESET, ICON_FIT, ICON_GRID, ICON_BONES
+    ICON_PLUS, ICON_RESET, ICON_FIT, ICON_GRID, ICON_BONES,
+    ICON_UNDO, ICON_REDO
 };
 
 static void icon_line(float ox, float oy, float s,
@@ -399,6 +413,20 @@ static void draw_icon2d(int icon, float x, float y, float size,
             icon_line(x,y,s,7.8f,5.2f,16.2f,8.8f,r,g,b);
             icon_line(x,y,s,16.6f,12.0f,9.4f,18.0f,r,g,b);
             break;
+        case ICON_UNDO:
+            icon_line(x,y,s,9,7,4,12,r,g,b);
+            icon_line(x,y,s,4,12,9,17,r,g,b);
+            icon_line(x,y,s,4,12,13,12,r,g,b);
+            icon_line(x,y,s,13,12,18,15,r,g,b);
+            icon_line(x,y,s,18,15,18,19,r,g,b);
+            break;
+        case ICON_REDO:
+            icon_line(x,y,s,15,7,20,12,r,g,b);
+            icon_line(x,y,s,20,12,15,17,r,g,b);
+            icon_line(x,y,s,20,12,11,12,r,g,b);
+            icon_line(x,y,s,11,12,6,15,r,g,b);
+            icon_line(x,y,s,6,15,6,19,r,g,b);
+            break;
         default:
             break;
     }
@@ -510,13 +538,21 @@ static void reload_texture(void) {
 
 static int load_project(void) {
     if (!vl_model_load_project(&g_model, PATH_MODEL)) {
-        set_color(1.0f,1.0f,1.0f);
-        snprintf(g_status, sizeof(g_status), "%s", "NO PROJECT: EXPORT FROM BLENDER AND COPY model.vlmesh");
-        reload_texture();
+        if (g_model.loaded) {
+            snprintf(g_status, sizeof(g_status), "%s",
+                     "LOAD FAILED - CURRENT PROJECT KEPT");
+        } else {
+            snprintf(g_status, sizeof(g_status), "%s",
+                     "NO PROJECT: EXPORT FROM BLENDER AND COPY model.vlmesh");
+        }
+        /* A failed transactional load leaves the previous model intact; keep
+           its texture too instead of deleting a valid renderer resource. */
         return 0;
     }
     g_selected_bone = 0;
     g_bone_scroll = 0;
+    g_undo_count = 0;
+    g_redo_count = 0;
     g_camera_distance = fmaxf(2.8f, g_model.radius * 3.8f);
     g_pose_mode = 1;
     reload_texture();
@@ -537,10 +573,112 @@ static void save_pose(void) {
 
 static void load_pose(void) {
     if (!g_model.loaded || vl_model_load_pose(&g_model, PATH_POSE_IN) <= 0) {
-        snprintf(g_status, sizeof(g_status), "%s", "NO MATCHING input.vlpose FOUND");
+        snprintf(g_status, sizeof(g_status), "%s", "POSE LOAD FAILED - CURRENT POSE KEPT");
     } else {
-        snprintf(g_status, sizeof(g_status), "%s", "POSE LOADED");
+        /* Loading a pose changes many bones at once; until bulk pose operations
+           have grouped history snapshots, clear per-transform history rather
+           than offering a misleading undo into an older state. */
+        g_undo_count = 0;
+        g_redo_count = 0;
+        snprintf(g_status, sizeof(g_status), "%s", "POSE LOADED - HISTORY CLEARED");
     }
+}
+
+static PoseSnapshot capture_bone_snapshot(int bone_index) {
+    PoseSnapshot snapshot;
+    int i;
+    memset(&snapshot, 0, sizeof(snapshot));
+    snapshot.bone_index = bone_index;
+    if (!g_model.loaded || bone_index < 0 || bone_index >= g_model.bone_count) {
+        snapshot.bone_index = -1;
+        return snapshot;
+    }
+    for (i = 0; i < 3; ++i) {
+        snapshot.location[i] = g_model.bones[bone_index].basis_location[i];
+        snapshot.rotation[i] = g_model.bones[bone_index].basis_rotation[i];
+        snapshot.scale[i] = g_model.bones[bone_index].basis_scale[i];
+    }
+    return snapshot;
+}
+
+static PoseSnapshot capture_pose_snapshot(void) {
+    return capture_bone_snapshot(g_selected_bone);
+}
+
+static int snapshots_equal(const PoseSnapshot *a, const PoseSnapshot *b) {
+    int i;
+    if (a->bone_index != b->bone_index) return 0;
+    for (i = 0; i < 3; ++i) {
+        if (fabsf(a->location[i] - b->location[i]) > 0.000001f ||
+            fabsf(a->rotation[i] - b->rotation[i]) > 0.000001f ||
+            fabsf(a->scale[i] - b->scale[i]) > 0.000001f) return 0;
+    }
+    return 1;
+}
+
+static void history_push(PoseSnapshot *stack, int *count,
+                         const PoseSnapshot *snapshot) {
+    if (snapshot->bone_index < 0) return;
+    if (*count > 0 && snapshots_equal(&stack[*count - 1], snapshot)) return;
+    if (*count >= POSE_HISTORY_CAPACITY) {
+        memmove(stack, stack + 1,
+                sizeof(*stack) * (POSE_HISTORY_CAPACITY - 1));
+        *count = POSE_HISTORY_CAPACITY - 1;
+    }
+    stack[(*count)++] = *snapshot;
+}
+
+static void history_record_undo(void) {
+    PoseSnapshot current;
+    if (!g_model.loaded || g_model.bone_count <= 0) return;
+    current = capture_pose_snapshot();
+    history_push(g_undo_history, &g_undo_count, &current);
+    g_redo_count = 0;
+}
+
+static void apply_pose_snapshot(const PoseSnapshot *snapshot) {
+    int i;
+    if (!snapshot || snapshot->bone_index < 0 ||
+        snapshot->bone_index >= g_model.bone_count) return;
+    g_selected_bone = snapshot->bone_index;
+    if (g_selected_bone < g_bone_scroll) g_bone_scroll = g_selected_bone;
+    if (g_selected_bone >= g_bone_scroll + 6) g_bone_scroll = g_selected_bone - 5;
+    for (i = 0; i < 3; ++i) {
+        g_model.bones[g_selected_bone].basis_location[i] = snapshot->location[i];
+        g_model.bones[g_selected_bone].basis_rotation[i] = snapshot->rotation[i];
+        g_model.bones[g_selected_bone].basis_scale[i] = snapshot->scale[i];
+    }
+    vl_model_update_skin(&g_model);
+}
+
+static void undo_transform(void) {
+    PoseSnapshot previous;
+    PoseSnapshot current;
+    if (!g_model.loaded || g_model.bone_count <= 0 || g_undo_count <= 0) {
+        snprintf(g_status, sizeof(g_status), "%s", "NOTHING TO UNDO");
+        return;
+    }
+    previous = g_undo_history[--g_undo_count];
+    /* History entries identify the bone that was edited. Selection may have
+       changed since then, so redo must capture that bone, not today's selection. */
+    current = capture_bone_snapshot(previous.bone_index);
+    history_push(g_redo_history, &g_redo_count, &current);
+    apply_pose_snapshot(&previous);
+    snprintf(g_status, sizeof(g_status), "%s", "UNDO TRANSFORM");
+}
+
+static void redo_transform(void) {
+    PoseSnapshot next;
+    PoseSnapshot current;
+    if (!g_model.loaded || g_model.bone_count <= 0 || g_redo_count <= 0) {
+        snprintf(g_status, sizeof(g_status), "%s", "NOTHING TO REDO");
+        return;
+    }
+    next = g_redo_history[--g_redo_count];
+    current = capture_bone_snapshot(next.bone_index);
+    history_push(g_undo_history, &g_undo_count, &current);
+    apply_pose_snapshot(&next);
+    snprintf(g_status, sizeof(g_status), "%s", "REDO TRANSFORM");
 }
 
 static float active_rotation_degrees(void) {
@@ -576,7 +714,8 @@ static float active_transform_max(void) {
 }
 
 static void set_active_transform(float value) {
-    if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0) return;
+    if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0 || !g_pose_mode) return;
+    if (!g_drag_slider) history_record_undo();
     if (g_transform_tool == 1) {
         g_model.bones[g_selected_bone].basis_location[g_active_axis] =
             fmaxf(-2.0f, fminf(2.0f, value));
@@ -603,7 +742,8 @@ static void adjust_rotation(float amount) {
 
 static void reset_active_transform(void) {
     int i;
-    if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0) return;
+    if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0 || !g_pose_mode) return;
+    history_record_undo();
     if (g_transform_tool == 1) {
         g_model.bones[g_selected_bone].basis_location[g_active_axis] = 0.0f;
     } else if (g_transform_tool == 2) {
@@ -975,6 +1115,8 @@ static void draw_ui_overlay(void) {
     button_icon2d(405,9,34,28,ICON_LAYOUT,1);
     button_icon2d(445,9,34,28,ICON_POSE,g_pose_mode);
     button_icon2d(485,9,34,28,ICON_OBJECT,!g_pose_mode);
+    button_icon2d(532,9,34,28,ICON_UNDO,g_undo_count>0);
+    button_icon2d(572,9,34,28,ICON_REDO,g_redo_count>0);
     button_icon2d(748,9,34,28,ICON_FIT,0);
     button_icon2d(788,9,34,28,ICON_OPEN,0);
     button_icon2d(828,9,34,28,ICON_LOAD,0);
@@ -1033,6 +1175,8 @@ static void on_touch_press(int x, int y) {
         else if (x >= 788 && x < 824) load_project();
         else if (x >= 828 && x < 864) load_pose();
         else if (x >= 868 && x < 904) save_pose();
+        else if (x >= 532 && x < 566) undo_transform();
+        else if (x >= 572 && x < 606) redo_transform();
         else if (x >= 908 && x < 948) g_pose_mode = !g_pose_mode;
         else if (x >= 445 && x < 479) g_pose_mode = 1;
         else if (x >= 485 && x < 519) g_pose_mode = 0;
@@ -1064,6 +1208,7 @@ static void on_touch_press(int x, int y) {
         return;
     }
     if (x >= 690 && x <= 940 && y >= 348 && y <= 359) {
+        history_record_undo();
         g_drag_slider = 1;
         set_slider_from_x(x);
         return;

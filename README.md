@@ -12,7 +12,9 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - Toggle the grid and skeleton overlays independently, and reset the camera to frame the current model.
 - Select bones in the outliner or by tapping the visible skeleton in the 3D viewport. The Select/Move/Rotate/Scale tools edit the corresponding bone transform using the touch slider, D-pad, and shoulder-button fine steps.
 - Orbit the camera by dragging in the viewport or using the left stick; the right stick adjusts zoom.
-- Load and save ```.vlpose``` files.
+- Load and save ```.vlpose``` files; malformed pose files are rejected without partially changing the current pose.
+- Undo/redo the last 24 bone-transform edits using the top-bar curved-arrow buttons. History follows the bone that was edited, even after selection changes.
+- Failed or malformed project loads preserve the currently loaded model; project parsing rejects non-finite values, invalid weights, incomplete triangles, duplicate bone names, and cyclic/out-of-range bone hierarchies.
 - Generate an app icon and LiveArea art, with GitHub Actions inputs to choose custom PNG files and the displayed app name.
 - Use an offline set of built-in Material-style vector icons for the toolbar and action buttons; no online font fetch is required.
 
@@ -38,7 +40,7 @@ cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
 cmake --build build --parallel 2
 ```
 
-The package should be `build/Vlender.vpk`. GitHub Actions runs the same toolchain flow and uploads a downloadable `Vlender-VPK` artifact.
+The package should be `build/Vlender.vpk`. GitHub Actions runs the same toolchain flow and uploads a downloadable `Vlender-VPK` artifact. CI also compiles and runs the host-side parser tests in `tests/test_model.c` before building the Vita package.
 
 ## Export a 3D project from Blender
 
@@ -80,7 +82,8 @@ Rotation values are XYZ Euler radians. Names use percent-encoding. Unknown bone 
 ## Repository layout
 
 - `src/main.c` - VitaGL workspace, UI, touch/controller input, BMP texture loading.
-- `src/model.c`, `src/model.h` - `.vlmesh`/`.vlpose` readers, transforms, and skinning.
+- `src/model.c`, `src/model.h` - validated transactional `.vlmesh`/`.vlpose` readers, transforms, and skinning.
+- `tests/test_model.c` - host-side parser and pose round-trip regression tests.
 - `blender_addon/vlender_bridge.py` - Blender export/import add-on.
 - `tools/generate_branding.py` - dependency-free icon and LiveArea-art generator.
 - `tools/generate_font_atlas.py` - creates the antialiased, embedded Noto Sans glyph atlas.

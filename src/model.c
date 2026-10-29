@@ -1,6 +1,7 @@
 #include "model.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,13 +137,39 @@ static void encode_name(const char *src, char *dst, size_t capacity) {
 
 static int split_tokens(char *line, char **tokens, int max_tokens) {
     int count = 0;
-    char *saveptr = NULL;
-    char *token = strtok_r(line, " \t\r\n", &saveptr);
-    while (token && count < max_tokens) {
-        tokens[count++] = token;
-        token = strtok_r(NULL, " \t\r\n", &saveptr);
+    char *cursor = line;
+    while (*cursor) {
+        while (*cursor == ' ' || *cursor == '\t' ||
+               *cursor == '\r' || *cursor == '\n') ++cursor;
+        if (!*cursor) break;
+        if (count >= max_tokens) return max_tokens + 1;
+        tokens[count++] = cursor;
+        while (*cursor && *cursor != ' ' && *cursor != '\t' &&
+               *cursor != '\r' && *cursor != '\n') ++cursor;
+        if (*cursor) *cursor++ = '\0';
     }
     return count;
+}
+
+static int valid_float_token(const char *token) {
+    char *end = NULL;
+    float value;
+    if (!token || !*token) return 0;
+    errno = 0;
+    value = strtof(token, &end);
+    return end != token && end && *end == 0 &&
+           errno != ERANGE && isfinite(value);
+}
+
+static int valid_int_token(const char *token) {
+    char *end = NULL;
+    long value;
+    if (!token || !*token) return 0;
+    errno = 0;
+    value = strtol(token, &end, 10);
+    return end != token && end && *end == 0 &&
+           errno != ERANGE && value >= -2147483647L - 1L &&
+           value <= 2147483647L;
 }
 
 static float token_float(char **tokens, int index) {
@@ -195,10 +222,15 @@ static int append_vertex(VLModel *model, const VLVertex *vertex) {
 static int parse_bone(VLModel *model, char **tokens, int count) {
     VLBone *bone;
     int i;
-    if (count != 34 || model->bone_count >= VLENDER_MAX_BONES) return 0;
+    if (count != 34 || model->bone_count >= VLENDER_MAX_BONES ||
+        !tokens[1][0] || !valid_int_token(tokens[2])) return 0;
+    for (i = 3; i < count; ++i) {
+        if (!valid_float_token(tokens[i])) return 0;
+    }
     bone = &model->bones[model->bone_count];
     memset(bone, 0, sizeof(*bone));
     decode_name(tokens[1], bone->name, sizeof(bone->name));
+    if (!bone->name[0] || vl_model_find_bone(model, bone->name) >= 0) return 0;
     bone->parent = token_int(tokens, 2);
     for (i = 0; i < 3; ++i) bone->head_local[i] = token_float(tokens, 3 + i);
     for (i = 0; i < 3; ++i) bone->tail_local[i] = token_float(tokens, 6 + i);
@@ -219,6 +251,10 @@ static int parse_vertex(VLModel *model, char **tokens, int count) {
     int i;
     float weight_sum = 0.0f;
     if (count < 10) return 0;
+    for (i = 1; i <= 8; ++i) {
+        if (!valid_float_token(tokens[i])) return 0;
+    }
+    if (!valid_int_token(tokens[9])) return 0;
     memset(&vertex, 0, sizeof(vertex));
     for (i = 0; i < 3; ++i) vertex.position[i] = token_float(tokens, 1 + i);
     for (i = 0; i < 3; ++i) vertex.normal[i] = token_float(tokens, 4 + i);
@@ -228,9 +264,18 @@ static int parse_vertex(VLModel *model, char **tokens, int count) {
     if (influence_count < 0 || influence_count > 4 ||
         count != 10 + influence_count * 2) return 0;
     for (i = 0; i < influence_count; ++i) {
-        int bone_id = token_int(tokens, 10 + i * 2);
-        float weight = token_float(tokens, 11 + i * 2);
-        if (bone_id >= 0 && bone_id < model->bone_count && weight > 0.0f) {
+        int bone_id;
+        float weight;
+        if (!valid_int_token(tokens[10 + i * 2]) ||
+            !valid_float_token(tokens[11 + i * 2])) return 0;
+        bone_id = token_int(tokens, 10 + i * 2);
+        weight = token_float(tokens, 11 + i * 2);
+        /* The exporter normalizes each vertex's top-four weights before
+           writing. Reject out-of-range weights so hostile/corrupt files cannot
+           overflow the sum and silently collapse a vertex's skinning. */
+        if (weight < 0.0f || weight > 1.0001f) return 0;
+        if (weight > 0.0f && (bone_id < 0 || bone_id >= model->bone_count)) return 0;
+        if (weight > 0.0f) {
             vertex.bone[i] = bone_id;
             vertex.weight[i] = weight;
             weight_sum += weight;
@@ -251,49 +296,104 @@ static int parse_vertex(VLModel *model, char **tokens, int count) {
     return append_vertex(model, &vertex);
 }
 
+static int validate_bone_visit(const VLModel *model, int index,
+                               unsigned char *state) {
+    int parent;
+    if (state[index] == 1) return 0;
+    if (state[index] == 2) return 1;
+    state[index] = 1;
+    parent = model->bones[index].parent;
+    if (parent < -1 || parent >= model->bone_count || parent == index) return 0;
+    if (parent >= 0 && !validate_bone_visit(model, parent, state)) return 0;
+    state[index] = 2;
+    return 1;
+}
+
+static int validate_bone_hierarchy(const VLModel *model) {
+    unsigned char state[VLENDER_MAX_BONES];
+    int i;
+    memset(state, 0, sizeof(state));
+    for (i = 0; i < model->bone_count; ++i) {
+        if (!validate_bone_visit(model, i, state)) return 0;
+    }
+    return 1;
+}
+
+/* Transactional load: a malformed/missing project never destroys the current model. */
 int vl_model_load_project(VLModel *model, const char *path) {
     FILE *file;
     char line[1024];
     int header_seen = 0;
+    VLModel candidate;
     if (!model || !path) return 0;
-    vl_model_free(model);
     file = fopen(path, "rb");
     if (!file) return 0;
 
+    vl_model_init(&candidate);
     while (fgets(line, sizeof(line), file)) {
         char *tokens[40];
         int count;
         char *trim = line;
+        size_t line_length = strlen(line);
+        if (line_length == sizeof(line) - 1 && line[line_length - 1] != '\n') {
+            int ch;
+            while ((ch = fgetc(file)) != '\n' && ch != EOF) { }
+            fclose(file);
+            vl_model_free(&candidate);
+            return 0;
+        }
         while (*trim == ' ' || *trim == '\t') ++trim;
         if (*trim == '\0' || *trim == '\n' || *trim == '#') continue;
         count = split_tokens(trim, tokens, 40);
         if (count == 0) continue;
         if (strcmp(tokens[0], "VLENDER_MESH") == 0) {
-            header_seen = count >= 2 && strcmp(tokens[1], "1") == 0;
-            if (!header_seen) break;
-        } else if (strcmp(tokens[0], "T") == 0 && count >= 2) {
-            snprintf(model->texture_name, sizeof(model->texture_name), "%s", tokens[1]);
-        } else if (strcmp(tokens[0], "B") == 0) {
-            if (!header_seen || !parse_bone(model, tokens, count)) {
+            if (header_seen || count != 2 || strcmp(tokens[1], "1") != 0) {
                 fclose(file);
-                vl_model_free(model);
+                vl_model_free(&candidate);
+                return 0;
+            }
+            header_seen = 1;
+        } else if (strcmp(tokens[0], "T") == 0) {
+            if (!header_seen || count != 2 || !tokens[1][0]) {
+                fclose(file);
+                vl_model_free(&candidate);
+                return 0;
+            }
+            snprintf(candidate.texture_name, sizeof(candidate.texture_name),
+                     "%s", tokens[1]);
+        } else if (strcmp(tokens[0], "B") == 0) {
+            if (!header_seen || !parse_bone(&candidate, tokens, count)) {
+                fclose(file);
+                vl_model_free(&candidate);
                 return 0;
             }
         } else if (strcmp(tokens[0], "V") == 0) {
-            if (!header_seen || !parse_vertex(model, tokens, count)) {
+            if (!header_seen || !parse_vertex(&candidate, tokens, count)) {
                 fclose(file);
-                vl_model_free(model);
+                vl_model_free(&candidate);
                 return 0;
             }
         }
     }
-    fclose(file);
-    if (!header_seen || model->vertex_count < 3) {
-        vl_model_free(model);
+
+    if (ferror(file)) {
+        fclose(file);
+        vl_model_free(&candidate);
         return 0;
     }
-    model->loaded = 1;
-    vl_model_update_skin(model);
+    fclose(file);
+
+    if (!header_seen || candidate.vertex_count < 3 ||
+        candidate.vertex_count % 3 != 0 ||
+        !validate_bone_hierarchy(&candidate)) {
+        vl_model_free(&candidate);
+        return 0;
+    }
+
+    candidate.loaded = 1;
+    vl_model_update_skin(&candidate);
+    vl_model_free(model);
+    *model = candidate;
     return 1;
 }
 
@@ -302,7 +402,13 @@ static void update_bone_pose(VLModel *model, int index, unsigned char *state) {
     float basis[16];
     if (state[index] == 2) return;
     if (state[index] == 1) {
-        bone->parent = -1;
+        /* Defensive cycle fallback. Valid projects reject cycles at load time;
+           never rewrite a bone's parent silently during pose evaluation. */
+        mat_from_trs(basis, bone->basis_location, bone->basis_rotation, bone->basis_scale);
+        mat_mul(bone->pose, bone->rest, basis);
+        mat_mul(bone->skin, bone->pose, bone->inv_rest);
+        state[index] = 2;
+        return;
     }
     state[index] = 1;
 
@@ -383,40 +489,90 @@ void vl_model_update_skin(VLModel *model) {
 int vl_model_load_pose(VLModel *model, const char *path) {
     FILE *file;
     char line[512];
-    int header_seen = 0, applied = 0;
-    if (!model || !path) return 0;
+    int header_seen = 0, applied = 0, failed = 0;
+    float old_trs[VLENDER_MAX_BONES][9];
+    int i, axis;
+    if (!model || !path || !model->loaded) return 0;
     file = fopen(path, "rb");
     if (!file) return 0;
+
+    for (i = 0; i < model->bone_count; ++i) {
+        for (axis = 0; axis < 3; ++axis) {
+            old_trs[i][axis] = model->bones[i].basis_rotation[axis];
+            old_trs[i][3 + axis] = model->bones[i].basis_location[axis];
+            old_trs[i][6 + axis] = model->bones[i].basis_scale[axis];
+        }
+    }
+
     while (fgets(line, sizeof(line), file)) {
         char *tokens[16];
         int count;
         char *trim = line;
+        size_t length = strlen(line);
+        if (length == sizeof(line) - 1 && line[length - 1] != '\n') {
+            int ch;
+            while ((ch = fgetc(file)) != '\n' && ch != EOF) { }
+            failed = 1;
+            break;
+        }
         while (*trim == ' ' || *trim == '\t') ++trim;
         if (*trim == '\0' || *trim == '\n' || *trim == '#') continue;
         count = split_tokens(trim, tokens, 16);
         if (!count) continue;
+
         if (strcmp(tokens[0], "VLENDER_POSE") == 0) {
-            header_seen = count >= 2 && strcmp(tokens[1], "1") == 0;
-            if (!header_seen) break;
+            if (header_seen || count != 2 || strcmp(tokens[1], "1") != 0) {
+                failed = 1;
+                break;
+            }
+            header_seen = 1;
             continue;
         }
-        if (strcmp(tokens[0], "B") == 0 && count == 11 && header_seen) {
+
+        if (strcmp(tokens[0], "B") == 0) {
             char name[VLENDER_NAME_MAX];
             int bone_id;
+            if (!header_seen || count != 11) {
+                failed = 1;
+                break;
+            }
+            for (i = 2; i < 11; ++i) {
+                if (!valid_float_token(tokens[i])) {
+                    failed = 1;
+                    break;
+                }
+            }
+            if (failed) break;
             decode_name(tokens[1], name, sizeof(name));
             bone_id = vl_model_find_bone(model, name);
             if (bone_id >= 0) {
                 VLBone *bone = &model->bones[bone_id];
-                int i;
-                for (i = 0; i < 3; ++i) bone->basis_rotation[i] = token_float(tokens, 2 + i);
-                for (i = 0; i < 3; ++i) bone->basis_location[i] = token_float(tokens, 5 + i);
-                for (i = 0; i < 3; ++i) bone->basis_scale[i] = token_float(tokens, 8 + i);
+                for (axis = 0; axis < 3; ++axis)
+                    bone->basis_rotation[axis] = token_float(tokens, 2 + axis);
+                for (axis = 0; axis < 3; ++axis)
+                    bone->basis_location[axis] = token_float(tokens, 5 + axis);
+                for (axis = 0; axis < 3; ++axis)
+                    bone->basis_scale[axis] = token_float(tokens, 8 + axis);
                 ++applied;
             }
         }
     }
+    if (ferror(file)) failed = 1;
     fclose(file);
-    if (applied > 0) vl_model_update_skin(model);
+
+    if (failed || !header_seen || applied == 0) {
+        for (i = 0; i < model->bone_count; ++i) {
+            for (axis = 0; axis < 3; ++axis) {
+                model->bones[i].basis_rotation[axis] = old_trs[i][axis];
+                model->bones[i].basis_location[axis] = old_trs[i][3 + axis];
+                model->bones[i].basis_scale[axis] = old_trs[i][6 + axis];
+            }
+        }
+        vl_model_update_skin(model);
+        return 0;
+    }
+
+    vl_model_update_skin(model);
     return applied;
 }
 
