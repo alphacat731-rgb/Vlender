@@ -54,6 +54,7 @@ static float g_camera_elevation = -62.0f;
 static float g_camera_distance = 5.0f;
 static char g_status[128] = "EXPORT A MODEL FROM BLENDER TO ux0:data/VLENDER/";
 static int g_frame = 1;
+static int g_open_menu = 0; /* 0 closed, 1 File, 2 Edit, 3 Render, 4 Window, 5 Help */
 static int g_has_transform_clipboard = 0;
 static float g_clipboard_location[3];
 static float g_clipboard_rotation[3];
@@ -1213,6 +1214,142 @@ static void draw_timeline(void) {
            168.0f + (float)(g_frame % 80) * 9.0f,480.0f,0.96f,0.42f,0.15f);
 }
 
+static int popup_menu_x(void) {
+    switch (g_open_menu) {
+        case 1: return 150;
+        case 2: return 185;
+        case 3: return 224;
+        case 4: return 267;
+        case 5: return 318;
+        default: return 0;
+    }
+}
+
+static int popup_menu_width(void) {
+    return g_open_menu == 5 ? 165 : 185;
+}
+
+static int popup_menu_rows(void) {
+    switch (g_open_menu) {
+        case 1: return 4;
+        case 2: return 5;
+        case 3: return 5;
+        case 4: return 3;
+        case 5: return 5;
+        default: return 0;
+    }
+}
+
+static const char *popup_menu_label(int row) {
+    static const char *file_items[] = {
+        "Reload Project", "Load Pose", "Save Pose", "Close Menu"
+    };
+    static const char *edit_items[] = {
+        "Undo Transform", "Redo Transform", "Copy Bone TRS",
+        "Paste Bone TRS", "Reset Bone Transform"
+    };
+    static const char *render_items[] = {
+        "Toggle Texture", "Toggle Wireframe", "Toggle Skeleton",
+        "Toggle Grid", "Reset View"
+    };
+    static const char *window_items[] = {
+        "Toggle Pose/Object", "Reset View", "Close Menu"
+    };
+    static const char *help_items[] = {
+        "D-pad: select bone", "Left/Right: adjust",
+        "Cross: change axis", "Circle: reset tool",
+        "Tap outside to close"
+    };
+    if (row < 0) return "";
+    switch (g_open_menu) {
+        case 1: return row < 4 ? file_items[row] : "";
+        case 2: return row < 5 ? edit_items[row] : "";
+        case 3: return row < 5 ? render_items[row] : "";
+        case 4: return row < 3 ? window_items[row] : "";
+        case 5: return row < 5 ? help_items[row] : "";
+        default: return "";
+    }
+}
+
+static void draw_popup_menu(void) {
+    int i, x, width, height;
+    if (g_open_menu == 0) return;
+    x = popup_menu_x();
+    width = popup_menu_width();
+    height = popup_menu_rows() * 23 + 8;
+    rect2d((float)x,42.0f,(float)width,(float)height,0.055f,0.062f,0.073f);
+    rect2d((float)x,42.0f,(float)width,1.0f,0.33f,0.39f,0.44f);
+    rect2d((float)x,42.0f,1.0f,(float)height,0.28f,0.33f,0.38f);
+    rect2d((float)(x+width-1),42.0f,1.0f,(float)height,0.28f,0.33f,0.38f);
+    rect2d((float)x,42.0f+(float)height-1.0f,(float)width,1.0f,0.28f,0.33f,0.38f);
+    for (i = 0; i < popup_menu_rows(); ++i) {
+        float y = 51.0f + (float)i * 23.0f;
+        text2d((float)x+10.0f,y,0.92f,
+               (g_open_menu == 5 ? 0.55f : 0.86f),
+               (g_open_menu == 5 ? 0.62f : 0.88f),
+               (g_open_menu == 5 ? 0.69f : 0.90f),
+               popup_menu_label(i));
+        if (i + 1 < popup_menu_rows() && g_open_menu != 5)
+            line2d((float)x+7.0f,y+17.0f,(float)(x+width-7),y+17.0f,
+                   0.13f,0.15f,0.18f);
+    }
+}
+
+static void execute_popup_item(int row) {
+    switch (g_open_menu) {
+        case 1:
+            if (row == 0) load_project();
+            else if (row == 1) load_pose();
+            else if (row == 2) save_pose();
+            break;
+        case 2:
+            if (row == 0) undo_transform();
+            else if (row == 1) redo_transform();
+            else if (row == 2) copy_selected_transform();
+            else if (row == 3) paste_selected_transform();
+            else if (row == 4) reset_active_transform();
+            break;
+        case 3:
+            if (row == 0) {
+                g_show_texture = !g_show_texture;
+                snprintf(g_status,sizeof(g_status),"TEXTURE DISPLAY %s",g_show_texture ? "ON" : "OFF");
+            } else if (row == 1) {
+                g_show_wireframe = !g_show_wireframe;
+                snprintf(g_status,sizeof(g_status),"WIREFRAME OVERLAY %s",g_show_wireframe ? "ON" : "OFF");
+            } else if (row == 2) {
+                g_show_skeleton = !g_show_skeleton;
+                snprintf(g_status,sizeof(g_status),"SKELETON OVERLAY %s",g_show_skeleton ? "ON" : "OFF");
+            } else if (row == 3) {
+                g_show_grid = !g_show_grid;
+                snprintf(g_status,sizeof(g_status),"VIEWPORT GRID %s",g_show_grid ? "ON" : "OFF");
+            } else if (row == 4) {
+                g_camera_azimuth = 32.0f;
+                g_camera_elevation = -62.0f;
+                g_camera_distance = g_model.loaded ? fmaxf(2.8f,g_model.radius*3.8f) : 4.2f;
+                snprintf(g_status,sizeof(g_status),"%s","VIEWPORT CAMERA RESET");
+            }
+            break;
+        case 4:
+            if (row == 0) {
+                g_pose_mode = !g_pose_mode;
+                snprintf(g_status,sizeof(g_status),"MODE: %s",g_pose_mode ? "POSE" : "OBJECT");
+            } else if (row == 1) {
+                g_camera_azimuth = 32.0f;
+                g_camera_elevation = -62.0f;
+                g_camera_distance = g_model.loaded ? fmaxf(2.8f,g_model.radius*3.8f) : 4.2f;
+                snprintf(g_status,sizeof(g_status),"%s","VIEWPORT CAMERA RESET");
+            }
+            break;
+        case 5:
+            snprintf(g_status,sizeof(g_status),"%s",
+                     "HELP: D-PAD SELECTS BONES; CROSS CHANGES AXIS; CIRCLE RESETS TOOL");
+            break;
+        default:
+            break;
+    }
+    g_open_menu = 0;
+}
+
 static void draw_ui_overlay(void) {
     char stats[80];
     begin_2d();
@@ -1257,6 +1394,7 @@ static void draw_ui_overlay(void) {
     text2d(654,72,0.9f,0.98f,0.42f,0.42f,"X");
     text2d(616,107,0.9f,0.39f,0.95f,0.51f,"Y");
     text2d(595,95,0.9f,0.40f,0.70f,1.0f,"Z");
+    draw_popup_menu();
 }
 
 static void draw_frame(void) {
@@ -1278,7 +1416,26 @@ static void set_slider_from_x(int x) {
 }
 
 static void on_touch_press(int x, int y) {
+    if (g_open_menu != 0 && y >= 45) {
+        int px = popup_menu_x();
+        int pw = popup_menu_width();
+        int rows = popup_menu_rows();
+        int bottom = 42 + rows * 23 + 8;
+        if (x >= px && x < px + pw && y >= 42 && y < bottom) {
+            int row = (y - 51) / 23;
+            if (row >= 0 && row < rows) execute_popup_item(row);
+            else g_open_menu = 0;
+        } else {
+            g_open_menu = 0;
+        }
+        return;
+    }
     if (y < 45) {
+        if (x >= 150 && x < 186) { g_open_menu = g_open_menu == 1 ? 0 : 1; return; }
+        if (x >= 186 && x < 224) { g_open_menu = g_open_menu == 2 ? 0 : 2; return; }
+        if (x >= 224 && x < 270) { g_open_menu = g_open_menu == 3 ? 0 : 3; return; }
+        if (x >= 270 && x < 320) { g_open_menu = g_open_menu == 4 ? 0 : 4; return; }
+        if (x >= 320 && x < 360) { g_open_menu = g_open_menu == 5 ? 0 : 5; return; }
         if (x >= 748 && x < 784) {
             g_camera_azimuth = 32.0f;
             g_camera_elevation = -62.0f;
