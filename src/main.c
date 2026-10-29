@@ -15,7 +15,7 @@
 
 #define SCREEN_W 960
 #define SCREEN_H 544
-#define MAX_BONES 64
+#define MAX_BONES 128
 #define NAME_CAP 96
 #define MAX_LINE 320
 #define BONE_ROW_Y 147
@@ -512,7 +512,7 @@ static void save_pose(void) {
         return;
     }
 
-    char buffer[16384];
+    static char buffer[65536];
     size_t used = 0;
     int count = snprintf(buffer, sizeof(buffer),
                          "VLENDER_POSE 1\n# B name_percent_encoded rx ry rz lx ly lz sx sy sz\n");
@@ -597,7 +597,7 @@ static int load_pose(void) {
     g_selected = 0;
     g_axis = 2;
     g_list_offset = 0;
-    set_status("Loaded pose data. The preview is schematic; Blender keeps the original rig.");
+    set_status(count >= MAX_BONES ? "Loaded pose data (128-bone limit). Preview is schematic." : "Loaded pose data. Preview is schematic; Blender keeps the original rig.");
     return 1;
 }
 
