@@ -1,0 +1,10 @@
+/build/
+/CMakeFiles/
+/CMakeCache.txt
+/compile_commands.json
+*.vpk
+*.self
+*.elf
+*.o
+__pycache__/
+*.py[cod]
