@@ -1500,22 +1500,39 @@ static void draw_toolbar(void) {
 static void draw_timeline(void) {
     int i;
     char label[40];
-    text2d(16,431,1.15f,0.89f,0.91f,0.93f,"TIMELINE");
-    text2d(16,449,0.9f,0.49f,0.55f,0.61f,"FRAME");
-    snprintf(label,sizeof(label),"%04d",g_frame);
-    text2d(58,449,1.05f,0.55f,0.96f,0.49f,label);
-    line2d(150,436,150,487,0.23f,0.27f,0.31f);
-    for (i = 0; i <= 80; ++i) {
-        float x = 168.0f + (float)i * 9.0f;
-        if (x > 942.0f) break;
+    text2d(16,431,1.12f,0.89f,0.91f,0.93f,"TIMELINE");
+    text2d(16,449,0.82f,0.49f,0.55f,0.61f,"FRAME");
+    snprintf(label,sizeof(label),"%02d / %02d",g_frame,VLENDER_TIMELINE_FRAMES);
+    text2d(56,449,0.87f,0.55f,0.96f,0.49f,label);
+
+    button_icon2d(91,442,18,22,ICON_PREV,0);
+    button_icon2d(111,442,18,22,ICON_NEXT,0);
+    button_icon2d(131,442,18,22,ICON_KEYFRAME,
+                  g_animation[g_frame - 1].valid);
+    button_icon2d(151,442,18,22,g_playing ? ICON_STOP : ICON_PLAY,g_playing);
+
+    line2d(178,436,178,487,0.23f,0.27f,0.31f);
+    for (i = 0; i < VLENDER_TIMELINE_FRAMES; ++i) {
+        float x = 188.0f + (float)i * 9.0f;
         float height = (i % 10 == 0) ? 15.0f : (i % 5 == 0 ? 9.0f : 5.0f);
+        if (g_animation[i].valid) {
+            set_color(0.40f,0.91f,0.42f);
+            glPointSize(4.0f);
+            glBegin(GL_POINTS);
+            glVertex2f(x,441.0f);
+            glEnd();
+        }
         line2d(x,455.0f-height*0.5f,x,455.0f+height*0.5f,
-               i == (g_frame % 80) ? 0.45f : 0.33f,
-               i == (g_frame % 80) ? 0.95f : 0.37f,
-               i == (g_frame % 80) ? 0.38f : 0.42f);
+               g_animation[i].valid ? 0.40f : 0.33f,
+               g_animation[i].valid ? 0.91f : 0.37f,
+               g_animation[i].valid ? 0.42f : 0.42f);
     }
-    line2d(168.0f + (float)(g_frame % 80) * 9.0f,437.0f,
-           168.0f + (float)(g_frame % 80) * 9.0f,480.0f,0.96f,0.42f,0.15f);
+    line2d(188.0f + (float)(g_frame - 1) * 9.0f,437.0f,
+           188.0f + (float)(g_frame - 1) * 9.0f,480.0f,
+           g_playing ? 0.35f : 0.96f,g_playing ? 0.95f : 0.42f,
+           g_playing ? 0.48f : 0.15f);
+    text2d(850,480,0.68f,0.45f,0.52f,0.58f,
+           g_playing ? "PLAYING" : "POSE KEYS");
 }
 
 static int popup_menu_x(void) {
@@ -1535,8 +1552,8 @@ static int popup_menu_width(void) {
 
 static int popup_menu_rows(void) {
     switch (g_open_menu) {
-        case 1: return 4;
-        case 2: return 5;
+        case 1: return 6;
+        case 2: return 8;
         case 3: return 5;
         case 4: return 3;
         case 5: return 5;
@@ -1546,11 +1563,13 @@ static int popup_menu_rows(void) {
 
 static const char *popup_menu_label(int row) {
     static const char *file_items[] = {
-        "Reload Project", "Load Pose", "Save Pose", "Close Menu"
+        "Reload Project", "Load Pose", "Save Pose",
+        "Load Animation", "Save Animation", "Close Menu"
     };
     static const char *edit_items[] = {
         "Undo Transform", "Redo Transform", "Copy Bone TRS",
-        "Paste Bone TRS", "Reset Bone Transform"
+        "Paste Bone TRS", "Reset Bone Transform", "Insert Keyframe",
+        "Delete Keyframe", "Play / Pause Timeline"
     };
     static const char *render_items[] = {
         "Toggle Texture", "Toggle Wireframe", "Toggle Skeleton",
@@ -1566,8 +1585,8 @@ static const char *popup_menu_label(int row) {
     };
     if (row < 0) return "";
     switch (g_open_menu) {
-        case 1: return row < 4 ? file_items[row] : "";
-        case 2: return row < 5 ? edit_items[row] : "";
+        case 1: return row < 6 ? file_items[row] : "";
+        case 2: return row < 8 ? edit_items[row] : "";
         case 3: return row < 5 ? render_items[row] : "";
         case 4: return row < 3 ? window_items[row] : "";
         case 5: return row < 5 ? help_items[row] : "";
@@ -1605,6 +1624,10 @@ static void execute_popup_item(int row) {
             if (row == 0) load_project();
             else if (row == 1) load_pose();
             else if (row == 2) save_pose();
+            else if (row == 3) {
+                if (!g_model.loaded || !parse_animation_file())
+                    snprintf(g_status,sizeof(g_status),"%s","ANIMATION LOAD FAILED - CHECK input.vlanim");
+            } else if (row == 4) save_animation();
             break;
         case 2:
             if (row == 0) undo_transform();
@@ -1612,6 +1635,9 @@ static void execute_popup_item(int row) {
             else if (row == 2) copy_selected_transform();
             else if (row == 3) paste_selected_transform();
             else if (row == 4) reset_active_transform();
+            else if (row == 5) insert_timeline_keyframe();
+            else if (row == 6) delete_timeline_keyframe();
+            else if (row == 7) toggle_timeline_playback();
             break;
         case 3:
             if (row == 0) {
