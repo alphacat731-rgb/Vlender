@@ -772,7 +772,6 @@ int main(void) {
     while (running) {
         running = update_input();
         draw_app();
-        sceDisplayWaitVblankStart();
     }
 
     if (g_texture) vita2d_free_texture(g_texture);
