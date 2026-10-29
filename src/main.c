@@ -579,22 +579,25 @@ static void load_pose(void) {
     }
 }
 
-static PoseSnapshot capture_pose_snapshot(void) {
+static PoseSnapshot capture_bone_snapshot(int bone_index) {
     PoseSnapshot snapshot;
     int i;
     memset(&snapshot, 0, sizeof(snapshot));
-    snapshot.bone_index = g_selected_bone;
-    if (!g_model.loaded || g_model.bone_count <= 0 ||
-        g_selected_bone < 0 || g_selected_bone >= g_model.bone_count) {
+    snapshot.bone_index = bone_index;
+    if (!g_model.loaded || bone_index < 0 || bone_index >= g_model.bone_count) {
         snapshot.bone_index = -1;
         return snapshot;
     }
     for (i = 0; i < 3; ++i) {
-        snapshot.location[i] = g_model.bones[g_selected_bone].basis_location[i];
-        snapshot.rotation[i] = g_model.bones[g_selected_bone].basis_rotation[i];
-        snapshot.scale[i] = g_model.bones[g_selected_bone].basis_scale[i];
+        snapshot.location[i] = g_model.bones[bone_index].basis_location[i];
+        snapshot.rotation[i] = g_model.bones[bone_index].basis_rotation[i];
+        snapshot.scale[i] = g_model.bones[bone_index].basis_scale[i];
     }
     return snapshot;
+}
+
+static PoseSnapshot capture_pose_snapshot(void) {
+    return capture_bone_snapshot(g_selected_bone);
 }
 
 static int snapshots_equal(const PoseSnapshot *a, const PoseSnapshot *b) {
@@ -644,26 +647,32 @@ static void apply_pose_snapshot(const PoseSnapshot *snapshot) {
 }
 
 static void undo_transform(void) {
+    PoseSnapshot previous;
     PoseSnapshot current;
     if (!g_model.loaded || g_model.bone_count <= 0 || g_undo_count <= 0) {
         snprintf(g_status, sizeof(g_status), "%s", "NOTHING TO UNDO");
         return;
     }
-    current = capture_pose_snapshot();
+    previous = g_undo_history[--g_undo_count];
+    /* History entries identify the bone that was edited. Selection may have
+       changed since then, so redo must capture that bone, not today's selection. */
+    current = capture_bone_snapshot(previous.bone_index);
     history_push(g_redo_history, &g_redo_count, &current);
-    apply_pose_snapshot(&g_undo_history[--g_undo_count]);
+    apply_pose_snapshot(&previous);
     snprintf(g_status, sizeof(g_status), "%s", "UNDO TRANSFORM");
 }
 
 static void redo_transform(void) {
+    PoseSnapshot next;
     PoseSnapshot current;
     if (!g_model.loaded || g_model.bone_count <= 0 || g_redo_count <= 0) {
         snprintf(g_status, sizeof(g_status), "%s", "NOTHING TO REDO");
         return;
     }
-    current = capture_pose_snapshot();
+    next = g_redo_history[--g_redo_count];
+    current = capture_bone_snapshot(next.bone_index);
     history_push(g_undo_history, &g_undo_count, &current);
-    apply_pose_snapshot(&g_redo_history[--g_redo_count]);
+    apply_pose_snapshot(&next);
     snprintf(g_status, sizeof(g_status), "%s", "REDO TRANSFORM");
 }
 
