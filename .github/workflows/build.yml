@@ -71,7 +71,7 @@ jobs:
       - name: Install PNG quantizer
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pngquant imagemagick python3-pil fonts-noto-core
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pngquant imagemagick python3-pil fonts-noto-core gcc
           pngquant --version
           convert -version
 
@@ -113,6 +113,14 @@ jobs:
 
       - name: Check branding generator syntax
         run: python3 -m py_compile tools/generate_branding.py tools/validate_png.py tools/validate_vita_png.py
+
+      - name: Run host-side model regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -Isrc \
+            src/model.c tests/test_model.c -lm -o /tmp/vlender-model-tests
+          /tmp/vlender-model-tests
 
       - name: Configure
         shell: bash
