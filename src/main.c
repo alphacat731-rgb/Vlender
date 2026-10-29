@@ -943,9 +943,13 @@ static void save_animation(void) {
             fputc('\n',file);
         }
     }
-    if (ferror(file) || fclose(file) != 0) {
-        snprintf(g_status,sizeof(g_status),"%s","ANIMATION SAVE FAILED");
-        return;
+    {
+        int write_failed = ferror(file);
+        if (fclose(file) != 0) write_failed = 1;
+        if (write_failed) {
+            snprintf(g_status,sizeof(g_status),"%s","ANIMATION SAVE FAILED");
+            return;
+        }
     }
     snprintf(g_status,sizeof(g_status),"%s","SAVED output.vlanim - IMPORT IN BLENDER");
 }
@@ -981,7 +985,6 @@ static int parse_animation_file(void) {
             if (!header_seen || sscanf(trim,"F %d",&frame) != 1 ||
                 frame < 1 || frame > VLENDER_TIMELINE_FRAMES) goto fail;
             current_frame = frame - 1;
-            candidate[current_frame].valid = 1;
             has_frame = 1;
         } else if (strcmp(type,"B") == 0) {
             char encoded[VLENDER_NAME_MAX * 3];
@@ -998,15 +1001,17 @@ static int parse_animation_file(void) {
             bone = vl_model_find_bone(&g_model,name);
             if (bone >= 0) {
                 memcpy(candidate[current_frame].trs[bone],values,sizeof(values));
+                candidate[current_frame].valid = 1;
                 ++matched;
             }
         }
     }
-    if (ferror(file) || fclose(file) != 0) {
+    {
+        int close_failed = ferror(file);
+        if (fclose(file) != 0) close_failed = 1;
         file = NULL;
-        goto fail;
+        if (close_failed) goto fail;
     }
-    file = NULL;
     if (!header_seen || !has_frame || matched == 0) goto fail;
     memcpy(g_animation,candidate,sizeof(g_animation));
     free(candidate);
