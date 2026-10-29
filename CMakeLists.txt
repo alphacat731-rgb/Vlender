@@ -41,6 +41,8 @@ target_link_libraries(Vlender PRIVATE
     SceSysmodule_stub
     SceIofilemgr_stub
     SceAppMgr_stub
+    SceProcessmgr_stub
+    m
 )
 
 vita_create_self(eboot.bin Vlender UNSAFE)
