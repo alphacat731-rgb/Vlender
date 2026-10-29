@@ -71,8 +71,9 @@ jobs:
       - name: Install PNG quantizer
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pngquant
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pngquant imagemagick
           pngquant --version
+          convert -version
 
       - name: Convert and validate Vita LiveArea PNGs
         shell: bash
@@ -87,9 +88,16 @@ jobs:
             local indexed="${file%.png}.indexed.png"
 
             # Vita's installer expects LiveArea graphics to be quantized PNGs.
+            local eight_bit="${file%.png}.8bit.png"
+
             pngquant --force --strip --quality=0-100 --speed 1 \
               --output "$indexed" 256 "$file"
-            mv "$indexed" "$file"
+            # pngquant may use 1/2/4-bit indices when the palette is small.
+            # Re-encode that indexed PNG with an explicit 8-bit palette depth.
+            convert "$indexed" -strip -define png:bit-depth=8 \
+              -define png:color-type=3 "$eight_bit"
+            mv "$eight_bit" "$file"
+            rm -f "$indexed"
             python3 tools/validate_vita_png.py "$file" "$width" "$height" "$max_bytes"
           }
 
