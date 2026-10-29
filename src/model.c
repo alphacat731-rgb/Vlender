@@ -335,15 +335,15 @@ int vl_model_load_project(VLModel *model, const char *path) {
         int count;
         char *trim = line;
         size_t line_length = strlen(line);
-        if (line_length == sizeof(line) - 1 && line[line_length - 1] != '\\n') {
+        if (line_length == sizeof(line) - 1 && line[line_length - 1] != '\n') {
             int ch;
-            while ((ch = fgetc(file)) != '\\n' && ch != EOF) { }
+            while ((ch = fgetc(file)) != '\n' && ch != EOF) { }
             fclose(file);
             vl_model_free(&candidate);
             return 0;
         }
-        while (*trim == ' ' || *trim == '\\t') ++trim;
-        if (*trim == '\\0' || *trim == '\\n' || *trim == '#') continue;
+        while (*trim == ' ' || *trim == '\t') ++trim;
+        if (*trim == '\0' || *trim == '\n' || *trim == '#') continue;
         count = split_tokens(trim, tokens, 40);
         if (count == 0) continue;
         if (strcmp(tokens[0], "VLENDER_MESH") == 0) {
@@ -509,14 +509,14 @@ int vl_model_load_pose(VLModel *model, const char *path) {
         int count;
         char *trim = line;
         size_t length = strlen(line);
-        if (length == sizeof(line) - 1 && line[length - 1] != '\\n') {
+        if (length == sizeof(line) - 1 && line[length - 1] != '\n') {
             int ch;
-            while ((ch = fgetc(file)) != '\\n' && ch != EOF) { }
+            while ((ch = fgetc(file)) != '\n' && ch != EOF) { }
             failed = 1;
             break;
         }
-        while (*trim == ' ' || *trim == '\\t') ++trim;
-        if (*trim == '\\0' || *trim == '\\n' || *trim == '#') continue;
+        while (*trim == ' ' || *trim == '\t') ++trim;
+        if (*trim == '\0' || *trim == '\n' || *trim == '#') continue;
         count = split_tokens(trim, tokens, 16);
         if (!count) continue;
 
