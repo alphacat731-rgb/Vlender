@@ -538,9 +538,15 @@ static void reload_texture(void) {
 
 static int load_project(void) {
     if (!vl_model_load_project(&g_model, PATH_MODEL)) {
-        set_color(1.0f,1.0f,1.0f);
-        snprintf(g_status, sizeof(g_status), "%s", "NO PROJECT: EXPORT FROM BLENDER AND COPY model.vlmesh");
-        reload_texture();
+        if (g_model.loaded) {
+            snprintf(g_status, sizeof(g_status), "%s",
+                     "LOAD FAILED - CURRENT PROJECT KEPT");
+        } else {
+            snprintf(g_status, sizeof(g_status), "%s",
+                     "NO PROJECT: EXPORT FROM BLENDER AND COPY model.vlmesh");
+        }
+        /* A failed transactional load leaves the previous model intact; keep
+           its texture too instead of deleting a valid renderer resource. */
         return 0;
     }
     g_selected_bone = 0;
