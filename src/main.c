@@ -53,6 +53,19 @@ static float g_camera_distance = 5.0f;
 static char g_status[128] = "EXPORT A MODEL FROM BLENDER TO ux0:data/VLENDER/";
 static int g_frame = 1;
 
+#define POSE_HISTORY_CAPACITY 24
+typedef struct {
+    int bone_index;
+    float location[3];
+    float rotation[3];
+    float scale[3];
+} PoseSnapshot;
+
+static PoseSnapshot g_undo_history[POSE_HISTORY_CAPACITY];
+static PoseSnapshot g_redo_history[POSE_HISTORY_CAPACITY];
+static int g_undo_count = 0;
+static int g_redo_count = 0;
+
 static void set_color(float r, float g, float b) {
     glColor4f(r, g, b, 1.0f);
 }
@@ -541,6 +554,94 @@ static void load_pose(void) {
     } else {
         snprintf(g_status, sizeof(g_status), "%s", "POSE LOADED");
     }
+}
+
+static PoseSnapshot capture_pose_snapshot(void) {
+    PoseSnapshot snapshot;
+    int i;
+    memset(&snapshot, 0, sizeof(snapshot));
+    snapshot.bone_index = g_selected_bone;
+    if (!g_model.loaded || g_model.bone_count <= 0 ||
+        g_selected_bone < 0 || g_selected_bone >= g_model.bone_count) {
+        snapshot.bone_index = -1;
+        return snapshot;
+    }
+    for (i = 0; i < 3; ++i) {
+        snapshot.location[i] = g_model.bones[g_selected_bone].basis_location[i];
+        snapshot.rotation[i] = g_model.bones[g_selected_bone].basis_rotation[i];
+        snapshot.scale[i] = g_model.bones[g_selected_bone].basis_scale[i];
+    }
+    return snapshot;
+}
+
+static int snapshots_equal(const PoseSnapshot *a, const PoseSnapshot *b) {
+    int i;
+    if (a->bone_index != b->bone_index) return 0;
+    for (i = 0; i < 3; ++i) {
+        if (fabsf(a->location[i] - b->location[i]) > 0.000001f ||
+            fabsf(a->rotation[i] - b->rotation[i]) > 0.000001f ||
+            fabsf(a->scale[i] - b->scale[i]) > 0.000001f) return 0;
+    }
+    return 1;
+}
+
+static void history_push(PoseSnapshot *stack, int *count,
+                         const PoseSnapshot *snapshot) {
+    if (snapshot->bone_index < 0) return;
+    if (*count > 0 && snapshots_equal(&stack[*count - 1], snapshot)) return;
+    if (*count >= POSE_HISTORY_CAPACITY) {
+        memmove(stack, stack + 1,
+                sizeof(*stack) * (POSE_HISTORY_CAPACITY - 1));
+        *count = POSE_HISTORY_CAPACITY - 1;
+    }
+    stack[(*count)++] = *snapshot;
+}
+
+static void history_record_undo(void) {
+    PoseSnapshot current;
+    if (!g_model.loaded || g_model.bone_count <= 0) return;
+    current = capture_pose_snapshot();
+    history_push(g_undo_history, &g_undo_count, &current);
+    g_redo_count = 0;
+}
+
+static void apply_pose_snapshot(const PoseSnapshot *snapshot) {
+    int i;
+    if (!snapshot || snapshot->bone_index < 0 ||
+        snapshot->bone_index >= g_model.bone_count) return;
+    g_selected_bone = snapshot->bone_index;
+    if (g_selected_bone < g_bone_scroll) g_bone_scroll = g_selected_bone;
+    if (g_selected_bone >= g_bone_scroll + 6) g_bone_scroll = g_selected_bone - 5;
+    for (i = 0; i < 3; ++i) {
+        g_model.bones[g_selected_bone].basis_location[i] = snapshot->location[i];
+        g_model.bones[g_selected_bone].basis_rotation[i] = snapshot->rotation[i];
+        g_model.bones[g_selected_bone].basis_scale[i] = snapshot->scale[i];
+    }
+    vl_model_update_skin(&g_model);
+}
+
+static void undo_transform(void) {
+    PoseSnapshot current;
+    if (!g_model.loaded || g_model.bone_count <= 0 || g_undo_count <= 0) {
+        snprintf(g_status, sizeof(g_status), "%s", "NOTHING TO UNDO");
+        return;
+    }
+    current = capture_pose_snapshot();
+    history_push(g_redo_history, &g_redo_count, &current);
+    apply_pose_snapshot(&g_undo_history[--g_undo_count]);
+    snprintf(g_status, sizeof(g_status), "%s", "UNDO TRANSFORM");
+}
+
+static void redo_transform(void) {
+    PoseSnapshot current;
+    if (!g_model.loaded || g_model.bone_count <= 0 || g_redo_count <= 0) {
+        snprintf(g_status, sizeof(g_status), "%s", "NOTHING TO REDO");
+        return;
+    }
+    current = capture_pose_snapshot();
+    history_push(g_undo_history, &g_undo_count, &current);
+    apply_pose_snapshot(&g_redo_history[--g_redo_count]);
+    snprintf(g_status, sizeof(g_status), "%s", "REDO TRANSFORM");
 }
 
 static float active_rotation_degrees(void) {
