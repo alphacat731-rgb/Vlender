@@ -872,11 +872,17 @@ static int apply_animation_frame(int frame, int announce) {
 static void goto_timeline_frame(int frame) {
     if (frame < 1) frame = 1;
     if (frame > VLENDER_TIMELINE_FRAMES) frame = VLENDER_TIMELINE_FRAMES;
+    g_playing = 0;
+    g_play_tick = 0;
     g_frame = frame;
     (void)apply_animation_frame(g_frame, 1);
 }
 
 static void insert_timeline_keyframe(void) {
+    if (!g_model.loaded || !g_pose_mode) {
+        snprintf(g_status,sizeof(g_status),"%s","ENTER POSE MODE TO INSERT A KEYFRAME");
+        return;
+    }
     if (!g_model.loaded) {
         snprintf(g_status,sizeof(g_status),"%s","LOAD A PROJECT BEFORE INSERTING KEYS");
         return;
@@ -1827,6 +1833,17 @@ static void on_touch_press(int x, int y) {
     if (x >= 748 && x < 798 && y >= 382 && y < 408) { adjust_rotation(5.0f); return; }
     if (x >= 802 && x < 870 && y >= 382 && y < 408) { reset_active_transform(); return; }
     if (x >= 876 && x < 940 && y >= 382 && y < 408) { g_pose_mode = !g_pose_mode; return; }
+    if (y >= 436 && y <= 486) {
+        if (x >= 91 && x < 109) { goto_timeline_frame(g_frame - 1); return; }
+        if (x >= 111 && x < 129) { goto_timeline_frame(g_frame + 1); return; }
+        if (x >= 131 && x < 149) { insert_timeline_keyframe(); return; }
+        if (x >= 151 && x < 169) { toggle_timeline_playback(); return; }
+        if (x >= 188 && x <= 908) {
+            int frame = 1 + (int)((x - 188 + 4) / 9);
+            goto_timeline_frame(frame);
+            return;
+        }
+    }
     if (x >= 44 && x <= 676 && y >= 52 && y <= 418) {
         g_drag_camera = 1;
     }
@@ -1903,6 +1920,13 @@ static int update_input(void) {
         }
         g_drag_camera = 0;
         g_drag_slider = 0;
+    }
+    if (g_playing) {
+        if (++g_play_tick >= 6) {
+            g_play_tick = 0;
+            g_frame = g_frame >= VLENDER_TIMELINE_FRAMES ? 1 : g_frame + 1;
+            (void)apply_animation_frame(g_frame, 0);
+        }
     }
     g_touch_down = touch_is_down;
     return 1;
