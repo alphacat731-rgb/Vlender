@@ -55,7 +55,10 @@ The package should be `build/Vlender.vpk`. GitHub Actions runs the same toolchai
 5. Start Vlender. The initial viewport shows a demo cube when no project is loaded. Tap **OPEN** to reload the model from `ux0:data/VLENDER/model.vlmesh`, or copy the project before launching.
 6. Tap a bone in the **Outliner** or directly in the 3D viewport to select it. Tap **SEL**, **MOV**, **ROT**, or **SCL** on the left toolbar to choose the transform tool. Use the **TEX** switch to show/hide the base-colour texture or the **WIREFR** switch to overlay triangle edges. The lower toolbar icons toggle the grid and skeleton overlay; use the top camera-frame icon to reset the view. Use the X/Y/Z buttons and property slider to adjust the active axis. Drag in the 3D viewport to orbit the camera. D-pad up/down selects bones; left/right adjusts the active tool; Cross changes axis; Circle resets the active transform; Select resets the camera; L/R make finer adjustments.
 7. Tap **SAVE**, or press Triangle, to write `ux0:data/VLENDER/output.vlpose`.
-8. Copy `output.vlpose` to the PC and use **File → Import → Vlender Pose (.vlpose)** in Blender. Review the pose and save a new `.blend` file.
+8. In the **Timeline** at the bottom, tap a frame tick to scrub. The diamond button inserts/overwrites a keyframe for the entire current pose; the play button previews interpolation, and the left/right buttons step frames. The Edit menu can also insert/delete a keyframe or toggle playback.
+9. Use **File → Save Animation** in Vlender to write `ux0:data/VLENDER/output.vlanim`. Copy it to the PC and use **File → Import → Vlender Animation (.vlanim)** in Blender to create an Action.
+10. To bring an existing Blender action to Vita, use **File → Export → Vlender Animation (.vlanim)** in Blender, copy it to `ux0:data/VLENDER/input.vlanim`, then choose **File → Load Animation** in Vlender.
+11. To bring a saved pose back to Blender, copy `output.vlpose` to the PC and use **File → Import → Vlender Pose (.vlpose)**. Review the result and save a new `.blend` file.
 
 The `.vlmesh` is a **single-mesh interchange format**, not a Blender file. Keep your original `.blend` and a backup. If the selected rig uses unusual constraints or non-standard bone setups, review the imported pose in Blender before saving.
 
