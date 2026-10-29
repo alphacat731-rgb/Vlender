@@ -27,14 +27,19 @@ add_executable(Vlender
 target_compile_options(Vlender PRIVATE
     -Os
     -fno-lto
+    -ffunction-sections
+    -fdata-sections
+    -fno-unwind-tables
+    -fno-asynchronous-unwind-tables
     -Wall
     -Wextra
     -Wno-sign-conversion
 )
 
-# vitaGL provides hardware-accelerated 3D. These libraries mirror the
-# upstream vitaGL sample's VitaSDK link dependencies.
-target_link_options(Vlender PRIVATE -Wl,-q -fno-lto)
+# vitaGL provides hardware-accelerated 3D. Drop unreachable code and unwind
+# metadata to leave the Vita SELF packager its required space at the end of
+# the executable segment as the editor grows.
+target_link_options(Vlender PRIVATE -Wl,-q -Wl,--gc-sections -fno-lto)
 target_link_libraries(Vlender PRIVATE
     vitaGL
     stdc++
