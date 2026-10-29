@@ -1116,6 +1116,11 @@ static float active_transform_max(void) {
 
 static void set_active_transform(float value) {
     if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0 || !g_pose_mode) return;
+    if (g_playing) {
+        g_playing = 0;
+        g_play_tick = 0;
+        snprintf(g_status,sizeof(g_status),"%s","PLAYBACK PAUSED FOR EDITING");
+    }
     if (!g_drag_slider) history_record_undo();
     if (g_transform_tool == 1) {
         g_model.bones[g_selected_bone].basis_location[g_active_axis] =
@@ -1144,6 +1149,10 @@ static void adjust_rotation(float amount) {
 static void reset_active_transform(void) {
     int i;
     if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0 || !g_pose_mode) return;
+    if (g_playing) {
+        g_playing = 0;
+        g_play_tick = 0;
+    }
     history_record_undo();
     if (g_transform_tool == 1) {
         g_model.bones[g_selected_bone].basis_location[g_active_axis] = 0.0f;
