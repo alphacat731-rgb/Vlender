@@ -8,6 +8,7 @@
 #include <psp2/display.h>
 #include <psp2/io/fcntl.h>
 #include <psp2/io/dirent.h>
+#include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/touch.h>
 
@@ -746,8 +747,8 @@ static int update_input(void) {
     sceTouchPeek(SCE_TOUCH_PORT_FRONT, &touch, 1);
     int touch_down = touch.reportNum > 0;
     if (touch_down && !g_touch_was_down) {
-        int x = (int)touch.reports[0].x / 2;
-        int y = (int)touch.reports[0].y / 2;
+        int x = (int)touch.report[0].x / 2;
+        int y = (int)touch.report[0].y / 2;
         handle_touch(x, y);
     }
     g_touch_was_down = touch_down;
