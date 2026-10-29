@@ -530,6 +530,14 @@ class IMPORT_SCENE_OT_vlender_animation(bpy.types.Operator, ImportHelper):
             self.report({"ERROR"}, "Could not read animation: %s" % exc)
             return {"CANCELLED"}
 
+        matched_names = {
+            name for frame_data in frames.values()
+            for name in frame_data if armature.pose.bones.get(name) is not None
+        }
+        if not matched_names:
+            self.report({"ERROR"}, "None of the animation's bone names match the selected armature.")
+            return {"CANCELLED"}
+
         action = bpy.data.actions.new("Vlender Animation")
         armature.animation_data_create()
         armature.animation_data.action = action
