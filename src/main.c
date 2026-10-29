@@ -54,6 +54,10 @@ static float g_camera_elevation = -62.0f;
 static float g_camera_distance = 5.0f;
 static char g_status[128] = "EXPORT A MODEL FROM BLENDER TO ux0:data/VLENDER/";
 static int g_frame = 1;
+static int g_has_transform_clipboard = 0;
+static float g_clipboard_location[3];
+static float g_clipboard_rotation[3];
+static float g_clipboard_scale[3];
 
 #define POSE_HISTORY_CAPACITY 24
 typedef struct {
@@ -243,7 +247,7 @@ enum {
     ICON_LAYOUT, ICON_POSE, ICON_OBJECT, ICON_OPEN,
     ICON_LOAD, ICON_SAVE, ICON_MODE, ICON_MINUS,
     ICON_PLUS, ICON_RESET, ICON_FIT, ICON_GRID, ICON_BONES,
-    ICON_UNDO, ICON_REDO, ICON_TEXTURE, ICON_WIREFRAME
+    ICON_UNDO, ICON_REDO, ICON_TEXTURE, ICON_WIREFRAME, ICON_COPY, ICON_PASTE
 };
 
 static void icon_line(float ox, float oy, float s,
@@ -449,6 +453,19 @@ static void draw_icon2d(int icon, float x, float y, float size,
             icon_line(x,y,s,12,13,12,22,r,g,b);
             icon_line(x,y,s,3,18,12,13,r,g,b);
             icon_line(x,y,s,12,13,21,18,r,g,b);
+            break;
+        case ICON_COPY:
+            icon_rect(x,y,s,8,7,12,14,r,g,b);
+            icon_line(x,y,s,5,16,3,16,r,g,b);
+            icon_line(x,y,s,3,16,3,3,r,g,b);
+            icon_line(x,y,s,3,3,15,3,r,g,b);
+            icon_line(x,y,s,15,3,15,5,r,g,b);
+            break;
+        case ICON_PASTE:
+            icon_rect(x,y,s,5,5,14,17,r,g,b);
+            icon_rect(x,y,s,9,2,6,5,r,g,b);
+            icon_line(x,y,s,8,12,16,12,r,g,b);
+            icon_line(x,y,s,8,16,16,16,r,g,b);
             break;
         default:
             break;
@@ -702,6 +719,41 @@ static void redo_transform(void) {
     history_push(g_undo_history, &g_undo_count, &current);
     apply_pose_snapshot(&next);
     snprintf(g_status, sizeof(g_status), "%s", "REDO TRANSFORM");
+}
+
+static void copy_selected_transform(void) {
+    int i;
+    if (!g_model.loaded || g_selected_bone < 0 ||
+        g_selected_bone >= g_model.bone_count) {
+        snprintf(g_status, sizeof(g_status), "%s", "COPY FAILED - NO BONE SELECTED");
+        return;
+    }
+    for (i = 0; i < 3; ++i) {
+        g_clipboard_location[i] = g_model.bones[g_selected_bone].basis_location[i];
+        g_clipboard_rotation[i] = g_model.bones[g_selected_bone].basis_rotation[i];
+        g_clipboard_scale[i] = g_model.bones[g_selected_bone].basis_scale[i];
+    }
+    g_has_transform_clipboard = 1;
+    snprintf(g_status, sizeof(g_status), "COPIED TRANSFORM: %.40s",
+             g_model.bones[g_selected_bone].name);
+}
+
+static void paste_selected_transform(void) {
+    int i;
+    if (!g_model.loaded || g_selected_bone < 0 ||
+        g_selected_bone >= g_model.bone_count || !g_has_transform_clipboard) {
+        snprintf(g_status, sizeof(g_status), "%s", "PASTE FAILED - COPY A BONE FIRST");
+        return;
+    }
+    history_record_undo();
+    for (i = 0; i < 3; ++i) {
+        g_model.bones[g_selected_bone].basis_location[i] = g_clipboard_location[i];
+        g_model.bones[g_selected_bone].basis_rotation[i] = g_clipboard_rotation[i];
+        g_model.bones[g_selected_bone].basis_scale[i] = g_clipboard_scale[i];
+    }
+    vl_model_update_skin(&g_model);
+    snprintf(g_status, sizeof(g_status), "PASTED TRANSFORM: %.40s",
+             g_model.bones[g_selected_bone].name);
 }
 
 static float active_rotation_degrees(void) {
@@ -1175,6 +1227,8 @@ static void draw_ui_overlay(void) {
     button_icon2d(485,9,34,28,ICON_OBJECT,!g_pose_mode);
     button_icon2d(532,9,34,28,ICON_UNDO,g_undo_count>0);
     button_icon2d(572,9,34,28,ICON_REDO,g_redo_count>0);
+    button_icon2d(612,9,34,28,ICON_COPY,g_model.loaded);
+    button_icon2d(652,9,34,28,ICON_PASTE,g_has_transform_clipboard);
     button_icon2d(748,9,34,28,ICON_FIT,0);
     button_icon2d(788,9,34,28,ICON_OPEN,0);
     button_icon2d(828,9,34,28,ICON_LOAD,0);
@@ -1235,6 +1289,8 @@ static void on_touch_press(int x, int y) {
         else if (x >= 868 && x < 904) save_pose();
         else if (x >= 532 && x < 566) undo_transform();
         else if (x >= 572 && x < 606) redo_transform();
+        else if (x >= 612 && x < 646) copy_selected_transform();
+        else if (x >= 652 && x < 686) paste_selected_transform();
         else if (x >= 908 && x < 948) g_pose_mode = !g_pose_mode;
         else if (x >= 445 && x < 479) g_pose_mode = 1;
         else if (x >= 485 && x < 519) g_pose_mode = 0;
