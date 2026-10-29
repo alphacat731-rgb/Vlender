@@ -1,0 +1,47 @@
+name: Build Vlender VPK
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-vpk:
+    name: Build Vita homebrew
+    runs-on: ubuntu-24.04
+    container:
+      image: vitasdk/vitasdk:2026.08
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show VitaSDK environment
+        run: |
+          echo "VITASDK=$VITASDK"
+          test -f "$VITASDK/share/vita.toolchain.cmake"
+          command -v arm-vita-eabi-gcc
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VPK
+        run: cmake --build build --parallel 2
+
+      - name: Verify package exists
+        run: test -s build/Vlender.vpk
+
+      - name: Upload VPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vlender-VPK
+          path: build/Vlender.vpk
+          if-no-files-found: error
+          retention-days: 30
