@@ -883,10 +883,6 @@ static void insert_timeline_keyframe(void) {
         snprintf(g_status,sizeof(g_status),"%s","ENTER POSE MODE TO INSERT A KEYFRAME");
         return;
     }
-    if (!g_model.loaded) {
-        snprintf(g_status,sizeof(g_status),"%s","LOAD A PROJECT BEFORE INSERTING KEYS");
-        return;
-    }
     capture_animation_frame(g_frame);
     snprintf(g_status,sizeof(g_status),"INSERTED KEYFRAME AT %02d",g_frame);
 }
@@ -925,11 +921,18 @@ static void toggle_timeline_playback(void) {
 
 static void save_animation(void) {
     FILE *file;
-    int frame, bone, axis;
+    int frame, bone, axis, has_keyframe = 0;
     char encoded[VLENDER_NAME_MAX * 3];
     ensure_data_directory();
     if (!g_model.loaded) {
         snprintf(g_status,sizeof(g_status),"%s","SAVE ANIMATION FAILED - NO PROJECT");
+        return;
+    }
+    for (frame = 0; frame < VLENDER_TIMELINE_FRAMES; ++frame) {
+        if (g_animation[frame].valid) { has_keyframe = 1; break; }
+    }
+    if (!has_keyframe) {
+        snprintf(g_status,sizeof(g_status),"%s","NO KEYFRAMES TO SAVE");
         return;
     }
     file = fopen(PATH_ANIM_OUT, "wb");
@@ -992,6 +995,17 @@ static int parse_animation_file(void) {
                 frame < 1 || frame > VLENDER_TIMELINE_FRAMES) goto fail;
             current_frame = frame - 1;
             has_frame = 1;
+            {
+                int bone, axis;
+                for (bone = 0; bone < g_model.bone_count; ++bone) {
+                    VLBone *source_bone = &g_model.bones[bone];
+                    for (axis = 0; axis < 3; ++axis) {
+                        candidate[current_frame].trs[bone][axis] = source_bone->basis_rotation[axis];
+                        candidate[current_frame].trs[bone][3 + axis] = source_bone->basis_location[axis];
+                        candidate[current_frame].trs[bone][6 + axis] = source_bone->basis_scale[axis];
+                    }
+                }
+            }
         } else if (strcmp(type,"B") == 0) {
             char encoded[VLENDER_NAME_MAX * 3];
             float values[9];
