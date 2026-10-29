@@ -245,6 +245,10 @@ static int parse_vertex(VLModel *model, char **tokens, int count) {
     int i;
     float weight_sum = 0.0f;
     if (count < 10) return 0;
+    for (i = 1; i <= 8; ++i) {
+        if (!valid_float_token(tokens[i])) return 0;
+    }
+    if (!valid_int_token(tokens[9])) return 0;
     memset(&vertex, 0, sizeof(vertex));
     for (i = 0; i < 3; ++i) vertex.position[i] = token_float(tokens, 1 + i);
     for (i = 0; i < 3; ++i) vertex.normal[i] = token_float(tokens, 4 + i);
@@ -254,9 +258,15 @@ static int parse_vertex(VLModel *model, char **tokens, int count) {
     if (influence_count < 0 || influence_count > 4 ||
         count != 10 + influence_count * 2) return 0;
     for (i = 0; i < influence_count; ++i) {
-        int bone_id = token_int(tokens, 10 + i * 2);
-        float weight = token_float(tokens, 11 + i * 2);
-        if (bone_id >= 0 && bone_id < model->bone_count && weight > 0.0f) {
+        int bone_id;
+        float weight;
+        if (!valid_int_token(tokens[10 + i * 2]) ||
+            !valid_float_token(tokens[11 + i * 2])) return 0;
+        bone_id = token_int(tokens, 10 + i * 2);
+        weight = token_float(tokens, 11 + i * 2);
+        if (weight < 0.0f) return 0;
+        if (weight > 0.0f && (bone_id < 0 || bone_id >= model->bone_count)) return 0;
+        if (weight > 0.0f) {
             vertex.bone[i] = bone_id;
             vertex.weight[i] = weight;
             weight_sum += weight;
