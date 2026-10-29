@@ -1,6 +1,6 @@
 # Vlender
 
-**Vlender** is a PlayStation Vita homebrew 3D posing workspace inspired by Blender's dark editor layout. It uses **vitaGL** for hardware-accelerated 3D, a real perspective viewport, UV-mapped meshes, an armature outliner, transform controls, a small timeline, and front-touchscreen interaction.
+**Vlender** is a PlayStation Vita homebrew 3D posing workspace inspired by Blender's dark editor layout. It uses **vitaGL** for hardware-accelerated 3D, a real perspective viewport, UV-mapped meshes, an armature outliner, transform controls, a small timeline, and front-touchscreen interaction. The interface uses an embedded antialiased Noto Sans raster, so no font is downloaded at runtime.
 
 It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.vlmesh` project format exported from Blender by the included add-on. Poses can be brought back into the original ```.blend``` project without rewriting that file on the Vita.
 
@@ -20,7 +20,7 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - The app **does not read arbitrary ```.blend``` files directly**. Export a ```.vlmesh``` project from Blender first.
 - This alpha exports one mesh per project, with the mesh's active UV map and one base-colour image texture. Complex Blender shader graphs, multiple materials, modifiers, shape keys, cloth/physics, and animation playback are not evaluated by the Vita exporter.
 - The texture bridge writes a 24-bit BMP preview with a maximum edge of 512 pixels to fit the Vita memory/GPU budget.
-- The current file format is capped at 128 bones and 10,000 triangles.
+- The file format now accepts up to 256 bones and 15,000 triangles (45,000 triangle corners). Larger scenes still need decimation for Vita performance and memory use.
 - The viewport editor is Blender-inspired, not a pixel-perfect port of Blender's desktop UI. The timeline is visual scaffolding, not a keyframe animation editor yet.
 - vitaGL homebrew requires the compatible console-side shader compiler module (`libshacccg.suprx`) to be available on the Vita. The build does not bundle proprietary system files.
 
@@ -30,6 +30,8 @@ Use the official VitaSDK toolchain and install vitaGL and its dependencies. In t
 
 ```sh
 vdpm install vitaGL
+# Also install python3-pil and fonts-noto-core on the build host.
+python3 tools/generate_font_atlas.py
 python3 tools/generate_branding.py
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 2
@@ -80,6 +82,7 @@ Rotation values are XYZ Euler radians. Names use percent-encoding. Unknown bone 
 - `src/model.c`, `src/model.h` - `.vlmesh`/`.vlpose` readers, transforms, and skinning.
 - `blender_addon/vlender_bridge.py` - Blender export/import add-on.
 - `tools/generate_branding.py` - dependency-free icon and LiveArea-art generator.
+- `tools/generate_font_atlas.py` - creates the antialiased, embedded Noto Sans glyph atlas.
 - `tools/validate_png.py` - checks custom artwork dimensions in CI.
 - `.github/workflows/build.yml` - VPK build and branding customization inputs.
 

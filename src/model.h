@@ -1,9 +1,9 @@
 #ifndef VLENDER_MODEL_H
 #define VLENDER_MODEL_H
 
-#define VLENDER_MAX_BONES 128
-#define VLENDER_MAX_CORNERS 30000
-#define VLENDER_NAME_MAX 64
+#define VLENDER_MAX_BONES 256
+#define VLENDER_MAX_CORNERS 45000
+#define VLENDER_NAME_MAX 80
 
 typedef struct {
     float position[3];

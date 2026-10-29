@@ -22,8 +22,8 @@ from bpy_extras.io_utils import ExportHelper, ImportHelper
 POSE_HEADER = "VLENDER_POSE 1"
 MESH_HEADER = "VLENDER_MESH 1"
 MAX_TEXTURE_EDGE = 512
-MAX_BONES = 128
-MAX_TRIANGLE_CORNERS = 30000
+MAX_BONES = 256
+MAX_TRIANGLE_CORNERS = 45000
 
 
 def find_armature(context):

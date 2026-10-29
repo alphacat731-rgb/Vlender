@@ -71,7 +71,7 @@ jobs:
       - name: Install PNG quantizer
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pngquant imagemagick
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pngquant imagemagick python3-pil fonts-noto-core
           pngquant --version
           convert -version
 
@@ -105,11 +105,14 @@ jobs:
           quantize_vita_png assets/branding/livearea/bg.png 840 500 131072
           quantize_vita_png assets/branding/livearea/startup.png 280 158 65536
 
-      - name: Check Blender add-on syntax
-        run: python3 -m py_compile blender_addon/vlender_bridge.py
+      - name: Generate embedded Noto Sans font atlas
+        run: python3 tools/generate_font_atlas.py
+
+      - name: Check Blender add-on and font generator syntax
+        run: python3 -m py_compile blender_addon/vlender_bridge.py tools/generate_font_atlas.py
 
       - name: Check branding generator syntax
-        run: python3 -m py_compile tools/generate_branding.py tools/validate_png.py
+        run: python3 -m py_compile tools/generate_branding.py tools/validate_png.py tools/validate_vita_png.py
 
       - name: Configure
         shell: bash
