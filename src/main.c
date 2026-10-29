@@ -36,6 +36,8 @@ static unsigned char g_font_atlas_pixels[VL_FONT_RAW_SIZE];
 static int g_pose_mode = 1;
 static int g_show_grid = 1;
 static int g_show_skeleton = 1;
+static int g_show_texture = 1;
+static int g_show_wireframe = 0;
 static int g_transform_tool = 2; /* 0 select, 1 move, 2 rotate, 3 scale */
 static int g_selected_bone = 0;
 static int g_active_axis = 2;
@@ -241,7 +243,7 @@ enum {
     ICON_LAYOUT, ICON_POSE, ICON_OBJECT, ICON_OPEN,
     ICON_LOAD, ICON_SAVE, ICON_MODE, ICON_MINUS,
     ICON_PLUS, ICON_RESET, ICON_FIT, ICON_GRID, ICON_BONES,
-    ICON_UNDO, ICON_REDO
+    ICON_UNDO, ICON_REDO, ICON_TEXTURE, ICON_WIREFRAME
 };
 
 static void icon_line(float ox, float oy, float s,
@@ -426,6 +428,27 @@ static void draw_icon2d(int icon, float x, float y, float size,
             icon_line(x,y,s,20,12,11,12,r,g,b);
             icon_line(x,y,s,11,12,6,15,r,g,b);
             icon_line(x,y,s,6,15,6,19,r,g,b);
+            break;
+        case ICON_TEXTURE:
+            icon_rect(x,y,s,3,4,18,16,r,g,b);
+            icon_circle(x,y,s,8,9,2.2f,r,g,b);
+            icon_line(x,y,s,4,18,9,13,r,g,b);
+            icon_line(x,y,s,9,13,13,16,r,g,b);
+            icon_line(x,y,s,13,16,17,11,r,g,b);
+            icon_line(x,y,s,17,11,21,16,r,g,b);
+            break;
+        case ICON_WIREFRAME:
+            icon_line(x,y,s,12,3,21,8,r,g,b);
+            icon_line(x,y,s,21,8,12,13,r,g,b);
+            icon_line(x,y,s,12,13,3,8,r,g,b);
+            icon_line(x,y,s,3,8,12,3,r,g,b);
+            icon_line(x,y,s,3,8,3,18,r,g,b);
+            icon_line(x,y,s,3,18,12,22,r,g,b);
+            icon_line(x,y,s,12,22,21,18,r,g,b);
+            icon_line(x,y,s,21,18,21,8,r,g,b);
+            icon_line(x,y,s,12,13,12,22,r,g,b);
+            icon_line(x,y,s,3,18,12,13,r,g,b);
+            icon_line(x,y,s,12,13,21,18,r,g,b);
             break;
         default:
             break;
@@ -891,13 +914,16 @@ static void draw_model_mesh(void) {
         return;
     }
 
-    if (g_texture) {
+    if (g_show_texture && g_texture) {
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, g_texture);
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     } else {
         glDisable(GL_TEXTURE_2D);
     }
+
+    /* Solid or textured surface. The same lighting factor keeps solid mode
+       useful for checking shape, without relying on a material texture. */
     glBegin(GL_TRIANGLES);
     for (i = 0; i < g_model.vertex_count; ++i) {
         const VLVertex *v = &g_model.vertices[i];
@@ -905,12 +931,40 @@ static void draw_model_mesh(void) {
         float diffuse = fmaxf(0.0f, nx * -0.34f + ny * -0.42f + nz * 0.84f);
         float shade = 0.27f + diffuse * 0.73f;
         shade = fminf(1.0f, fmaxf(0.2f, shade));
-        if (!g_texture) set_color(0.36f * shade,0.72f * shade,0.46f * shade);
+        if (!g_show_texture || !g_texture) set_color(0.44f * shade,0.49f * shade,0.56f * shade);
         else set_color(shade,shade,shade);
         glTexCoord2f(v->uv[0],v->uv[1]);
         glVertex3f(v->skinned_position[0],v->skinned_position[1],v->skinned_position[2]);
     }
     glEnd();
+
+    if (g_show_wireframe) {
+        /* Draw each triangle edge a hair above the skin surface to avoid
+           depth flicker. Uses the already-skinned vertices, so the overlay
+           follows bone edits in real time. */
+        glDisable(GL_TEXTURE_2D);
+        glDepthFunc(GL_LEQUAL);
+        glLineWidth(1.0f);
+        glBegin(GL_LINES);
+        for (i = 0; i + 2 < g_model.vertex_count; i += 3) {
+            const VLVertex *a = &g_model.vertices[i];
+            const VLVertex *b = &g_model.vertices[i + 1];
+            const VLVertex *c = &g_model.vertices[i + 2];
+            const VLVertex *ends[6] = {a,b,b,c,c,a};
+            int j;
+            set_color(0.055f,0.075f,0.095f);
+            for (j = 0; j < 6; ++j) {
+                const VLVertex *v = ends[j];
+                float offset = 0.0015f;
+                glVertex3f(v->skinned_position[0] + v->skinned_normal[0] * offset,
+                           v->skinned_position[1] + v->skinned_normal[1] * offset,
+                           v->skinned_position[2] + v->skinned_normal[2] * offset);
+            }
+        }
+        glEnd();
+        glDepthFunc(GL_LESS);
+    }
+
     if (g_texture) {
         glBindTexture(GL_TEXTURE_2D, 0);
         glDisable(GL_TEXTURE_2D);
@@ -1079,6 +1133,10 @@ static void draw_toolbar(void) {
     text2d(7,260,0.72f,0.44f,0.50f,0.56f,"GRID");
     button_icon2d(4,280,32,28,ICON_BONES,g_show_skeleton);
     text2d(5,309,0.72f,0.44f,0.50f,0.56f,"BONES");
+    button_icon2d(4,326,32,28,ICON_TEXTURE,g_show_texture);
+    text2d(4,355,0.66f,0.44f,0.50f,0.56f,"TEX");
+    button_icon2d(4,372,32,28,ICON_WIREFRAME,g_show_wireframe);
+    text2d(1,401,0.58f,0.44f,0.50f,0.56f,"WIREFR");
 }
 
 static void draw_timeline(void) {
@@ -1195,6 +1253,14 @@ static void on_touch_press(int x, int y) {
         else if (y >= 280 && y <= 308) {
             g_show_skeleton = !g_show_skeleton;
             snprintf(g_status,sizeof(g_status),"SKELETON OVERLAY %s",g_show_skeleton ? "ON" : "OFF");
+        }
+        else if (y >= 326 && y <= 354) {
+            g_show_texture = !g_show_texture;
+            snprintf(g_status,sizeof(g_status),"TEXTURE DISPLAY %s",g_show_texture ? "ON" : "OFF");
+        }
+        else if (y >= 372 && y <= 400) {
+            g_show_wireframe = !g_show_wireframe;
+            snprintf(g_status,sizeof(g_status),"WIREFRAME OVERLAY %s",g_show_wireframe ? "ON" : "OFF");
         }
         return;
     }
