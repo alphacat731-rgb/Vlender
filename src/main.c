@@ -36,6 +36,8 @@ static unsigned char g_font_atlas_pixels[VL_FONT_RAW_SIZE];
 static int g_pose_mode = 1;
 static int g_show_grid = 1;
 static int g_show_skeleton = 1;
+static int g_show_texture = 1;
+static int g_show_wireframe = 0;
 static int g_transform_tool = 2; /* 0 select, 1 move, 2 rotate, 3 scale */
 static int g_selected_bone = 0;
 static int g_active_axis = 2;
@@ -52,6 +54,10 @@ static float g_camera_elevation = -62.0f;
 static float g_camera_distance = 5.0f;
 static char g_status[128] = "EXPORT A MODEL FROM BLENDER TO ux0:data/VLENDER/";
 static int g_frame = 1;
+static int g_has_transform_clipboard = 0;
+static float g_clipboard_location[3];
+static float g_clipboard_rotation[3];
+static float g_clipboard_scale[3];
 
 #define POSE_HISTORY_CAPACITY 24
 typedef struct {
@@ -241,7 +247,7 @@ enum {
     ICON_LAYOUT, ICON_POSE, ICON_OBJECT, ICON_OPEN,
     ICON_LOAD, ICON_SAVE, ICON_MODE, ICON_MINUS,
     ICON_PLUS, ICON_RESET, ICON_FIT, ICON_GRID, ICON_BONES,
-    ICON_UNDO, ICON_REDO
+    ICON_UNDO, ICON_REDO, ICON_TEXTURE, ICON_WIREFRAME, ICON_COPY, ICON_PASTE
 };
 
 static void icon_line(float ox, float oy, float s,
@@ -427,6 +433,40 @@ static void draw_icon2d(int icon, float x, float y, float size,
             icon_line(x,y,s,11,12,6,15,r,g,b);
             icon_line(x,y,s,6,15,6,19,r,g,b);
             break;
+        case ICON_TEXTURE:
+            icon_rect(x,y,s,3,4,18,16,r,g,b);
+            icon_circle(x,y,s,8,9,2.2f,r,g,b);
+            icon_line(x,y,s,4,18,9,13,r,g,b);
+            icon_line(x,y,s,9,13,13,16,r,g,b);
+            icon_line(x,y,s,13,16,17,11,r,g,b);
+            icon_line(x,y,s,17,11,21,16,r,g,b);
+            break;
+        case ICON_WIREFRAME:
+            icon_line(x,y,s,12,3,21,8,r,g,b);
+            icon_line(x,y,s,21,8,12,13,r,g,b);
+            icon_line(x,y,s,12,13,3,8,r,g,b);
+            icon_line(x,y,s,3,8,12,3,r,g,b);
+            icon_line(x,y,s,3,8,3,18,r,g,b);
+            icon_line(x,y,s,3,18,12,22,r,g,b);
+            icon_line(x,y,s,12,22,21,18,r,g,b);
+            icon_line(x,y,s,21,18,21,8,r,g,b);
+            icon_line(x,y,s,12,13,12,22,r,g,b);
+            icon_line(x,y,s,3,18,12,13,r,g,b);
+            icon_line(x,y,s,12,13,21,18,r,g,b);
+            break;
+        case ICON_COPY:
+            icon_rect(x,y,s,8,7,12,14,r,g,b);
+            icon_line(x,y,s,5,16,3,16,r,g,b);
+            icon_line(x,y,s,3,16,3,3,r,g,b);
+            icon_line(x,y,s,3,3,15,3,r,g,b);
+            icon_line(x,y,s,15,3,15,5,r,g,b);
+            break;
+        case ICON_PASTE:
+            icon_rect(x,y,s,5,5,14,17,r,g,b);
+            icon_rect(x,y,s,9,2,6,5,r,g,b);
+            icon_line(x,y,s,8,12,16,12,r,g,b);
+            icon_line(x,y,s,8,16,16,16,r,g,b);
+            break;
         default:
             break;
     }
@@ -553,6 +593,7 @@ static int load_project(void) {
     g_bone_scroll = 0;
     g_undo_count = 0;
     g_redo_count = 0;
+    g_has_transform_clipboard = 0;
     g_camera_distance = fmaxf(2.8f, g_model.radius * 3.8f);
     g_pose_mode = 1;
     reload_texture();
@@ -679,6 +720,41 @@ static void redo_transform(void) {
     history_push(g_undo_history, &g_undo_count, &current);
     apply_pose_snapshot(&next);
     snprintf(g_status, sizeof(g_status), "%s", "REDO TRANSFORM");
+}
+
+static void copy_selected_transform(void) {
+    int i;
+    if (!g_model.loaded || !g_pose_mode || g_selected_bone < 0 ||
+        g_selected_bone >= g_model.bone_count) {
+        snprintf(g_status, sizeof(g_status), "%s", "COPY FAILED - ENTER POSE MODE");
+        return;
+    }
+    for (i = 0; i < 3; ++i) {
+        g_clipboard_location[i] = g_model.bones[g_selected_bone].basis_location[i];
+        g_clipboard_rotation[i] = g_model.bones[g_selected_bone].basis_rotation[i];
+        g_clipboard_scale[i] = g_model.bones[g_selected_bone].basis_scale[i];
+    }
+    g_has_transform_clipboard = 1;
+    snprintf(g_status, sizeof(g_status), "COPIED TRANSFORM: %.40s",
+             g_model.bones[g_selected_bone].name);
+}
+
+static void paste_selected_transform(void) {
+    int i;
+    if (!g_model.loaded || !g_pose_mode || g_selected_bone < 0 ||
+        g_selected_bone >= g_model.bone_count || !g_has_transform_clipboard) {
+        snprintf(g_status, sizeof(g_status), "%s", "PASTE FAILED - POSE MODE / COPY FIRST");
+        return;
+    }
+    history_record_undo();
+    for (i = 0; i < 3; ++i) {
+        g_model.bones[g_selected_bone].basis_location[i] = g_clipboard_location[i];
+        g_model.bones[g_selected_bone].basis_rotation[i] = g_clipboard_rotation[i];
+        g_model.bones[g_selected_bone].basis_scale[i] = g_clipboard_scale[i];
+    }
+    vl_model_update_skin(&g_model);
+    snprintf(g_status, sizeof(g_status), "PASTED TRANSFORM: %.40s",
+             g_model.bones[g_selected_bone].name);
 }
 
 static float active_rotation_degrees(void) {
@@ -891,13 +967,16 @@ static void draw_model_mesh(void) {
         return;
     }
 
-    if (g_texture) {
+    if (g_show_texture && g_texture) {
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, g_texture);
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     } else {
         glDisable(GL_TEXTURE_2D);
     }
+
+    /* Solid or textured surface. The same lighting factor keeps solid mode
+       useful for checking shape, without relying on a material texture. */
     glBegin(GL_TRIANGLES);
     for (i = 0; i < g_model.vertex_count; ++i) {
         const VLVertex *v = &g_model.vertices[i];
@@ -905,12 +984,40 @@ static void draw_model_mesh(void) {
         float diffuse = fmaxf(0.0f, nx * -0.34f + ny * -0.42f + nz * 0.84f);
         float shade = 0.27f + diffuse * 0.73f;
         shade = fminf(1.0f, fmaxf(0.2f, shade));
-        if (!g_texture) set_color(0.36f * shade,0.72f * shade,0.46f * shade);
+        if (!g_show_texture || !g_texture) set_color(0.44f * shade,0.49f * shade,0.56f * shade);
         else set_color(shade,shade,shade);
         glTexCoord2f(v->uv[0],v->uv[1]);
         glVertex3f(v->skinned_position[0],v->skinned_position[1],v->skinned_position[2]);
     }
     glEnd();
+
+    if (g_show_wireframe) {
+        /* Draw each triangle edge a hair above the skin surface to avoid
+           depth flicker. Uses the already-skinned vertices, so the overlay
+           follows bone edits in real time. */
+        glDisable(GL_TEXTURE_2D);
+        glDepthFunc(GL_LEQUAL);
+        glLineWidth(1.0f);
+        glBegin(GL_LINES);
+        for (i = 0; i + 2 < g_model.vertex_count; i += 3) {
+            const VLVertex *a = &g_model.vertices[i];
+            const VLVertex *b = &g_model.vertices[i + 1];
+            const VLVertex *c = &g_model.vertices[i + 2];
+            const VLVertex *ends[6] = {a,b,b,c,c,a};
+            int j;
+            set_color(0.055f,0.075f,0.095f);
+            for (j = 0; j < 6; ++j) {
+                const VLVertex *v = ends[j];
+                float offset = 0.0015f;
+                glVertex3f(v->skinned_position[0] + v->skinned_normal[0] * offset,
+                           v->skinned_position[1] + v->skinned_normal[1] * offset,
+                           v->skinned_position[2] + v->skinned_normal[2] * offset);
+            }
+        }
+        glEnd();
+        glDepthFunc(GL_LESS);
+    }
+
     if (g_texture) {
         glBindTexture(GL_TEXTURE_2D, 0);
         glDisable(GL_TEXTURE_2D);
@@ -1079,6 +1186,10 @@ static void draw_toolbar(void) {
     text2d(7,260,0.72f,0.44f,0.50f,0.56f,"GRID");
     button_icon2d(4,280,32,28,ICON_BONES,g_show_skeleton);
     text2d(5,309,0.72f,0.44f,0.50f,0.56f,"BONES");
+    button_icon2d(4,326,32,28,ICON_TEXTURE,g_show_texture);
+    text2d(4,355,0.66f,0.44f,0.50f,0.56f,"TEX");
+    button_icon2d(4,372,32,28,ICON_WIREFRAME,g_show_wireframe);
+    text2d(1,401,0.58f,0.44f,0.50f,0.56f,"WIREFR");
 }
 
 static void draw_timeline(void) {
@@ -1117,6 +1228,8 @@ static void draw_ui_overlay(void) {
     button_icon2d(485,9,34,28,ICON_OBJECT,!g_pose_mode);
     button_icon2d(532,9,34,28,ICON_UNDO,g_undo_count>0);
     button_icon2d(572,9,34,28,ICON_REDO,g_redo_count>0);
+    button_icon2d(612,9,34,28,ICON_COPY,g_model.loaded);
+    button_icon2d(652,9,34,28,ICON_PASTE,g_has_transform_clipboard && g_model.loaded && g_pose_mode);
     button_icon2d(748,9,34,28,ICON_FIT,0);
     button_icon2d(788,9,34,28,ICON_OPEN,0);
     button_icon2d(828,9,34,28,ICON_LOAD,0);
@@ -1177,6 +1290,8 @@ static void on_touch_press(int x, int y) {
         else if (x >= 868 && x < 904) save_pose();
         else if (x >= 532 && x < 566) undo_transform();
         else if (x >= 572 && x < 606) redo_transform();
+        else if (x >= 612 && x < 646) copy_selected_transform();
+        else if (x >= 652 && x < 686) paste_selected_transform();
         else if (x >= 908 && x < 948) g_pose_mode = !g_pose_mode;
         else if (x >= 445 && x < 479) g_pose_mode = 1;
         else if (x >= 485 && x < 519) g_pose_mode = 0;
@@ -1195,6 +1310,14 @@ static void on_touch_press(int x, int y) {
         else if (y >= 280 && y <= 308) {
             g_show_skeleton = !g_show_skeleton;
             snprintf(g_status,sizeof(g_status),"SKELETON OVERLAY %s",g_show_skeleton ? "ON" : "OFF");
+        }
+        else if (y >= 326 && y <= 354) {
+            g_show_texture = !g_show_texture;
+            snprintf(g_status,sizeof(g_status),"TEXTURE DISPLAY %s",g_show_texture ? "ON" : "OFF");
+        }
+        else if (y >= 372 && y <= 400) {
+            g_show_wireframe = !g_show_wireframe;
+            snprintf(g_status,sizeof(g_status),"WIREFRAME OVERLAY %s",g_show_wireframe ? "ON" : "OFF");
         }
         return;
     }

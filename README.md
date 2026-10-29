@@ -12,8 +12,10 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - Toggle the grid and skeleton overlays independently, and reset the camera to frame the current model.
 - Select bones in the outliner or by tapping the visible skeleton in the 3D viewport. The Select/Move/Rotate/Scale tools edit the corresponding bone transform using the touch slider, D-pad, and shoulder-button fine steps.
 - Orbit the camera by dragging in the viewport or using the left stick; the right stick adjusts zoom.
+- Switch the viewport between textured display and a neutral solid-shaded mode; toggle a real triangle-edge wireframe overlay independently from the skeleton.
 - Load and save ```.vlpose``` files; malformed pose files are rejected without partially changing the current pose.
 - Undo/redo the last 24 bone-transform edits using the top-bar curved-arrow buttons. History follows the bone that was edited, even after selection changes.
+- Copy a selected bone's full location/rotation/scale transform and paste it onto another bone while in Pose mode; clipboard clears when a different project is loaded.
 - Failed or malformed project loads preserve the currently loaded model; project parsing rejects non-finite values, invalid weights, incomplete triangles, duplicate bone names, and cyclic/out-of-range bone hierarchies.
 - Generate an app icon and LiveArea art, with GitHub Actions inputs to choose custom PNG files and the displayed app name.
 - Use an offline set of built-in Material-style vector icons for the toolbar and action buttons; no online font fetch is required.
@@ -49,7 +51,7 @@ The package should be `build/Vlender.vpk`. GitHub Actions runs the same toolchai
 3. Choose **File → Export → Vlender 3D Project (.vlmesh)**. The add-on writes a `.vlmesh` project file and, when it finds a suitable image texture, a sibling `texture.bmp`.
 4. With VitaShell, create `ux0:data/VLENDER/` and copy the exported project to `ux0:data/VLENDER/model.vlmesh`. Copy the companion texture to `ux0:data/VLENDER/texture.bmp` if one was exported.
 5. Start Vlender. The initial viewport shows a demo cube when no project is loaded. Tap **OPEN** to reload the model from `ux0:data/VLENDER/model.vlmesh`, or copy the project before launching.
-6. Tap a bone in the **Outliner** or directly in the 3D viewport to select it. Tap **SEL**, **MOV**, **ROT**, or **SCL** on the left toolbar to choose the transform tool. The lower toolbar icons toggle the grid and skeleton overlay; use the top camera-frame icon to reset the view. Use the X/Y/Z buttons and property slider to adjust the active axis. Drag in the 3D viewport to orbit the camera. D-pad up/down selects bones; left/right adjusts the active tool; Cross changes axis; Circle resets the active transform; Select resets the camera; L/R make finer adjustments.
+6. Tap a bone in the **Outliner** or directly in the 3D viewport to select it. Tap **SEL**, **MOV**, **ROT**, or **SCL** on the left toolbar to choose the transform tool. Use the **TEX** switch to show/hide the base-colour texture or the **WIREFR** switch to overlay triangle edges. The lower toolbar icons toggle the grid and skeleton overlay; use the top camera-frame icon to reset the view. Use the X/Y/Z buttons and property slider to adjust the active axis. Drag in the 3D viewport to orbit the camera. D-pad up/down selects bones; left/right adjusts the active tool; Cross changes axis; Circle resets the active transform; Select resets the camera; L/R make finer adjustments.
 7. Tap **SAVE**, or press Triangle, to write `ux0:data/VLENDER/output.vlpose`.
 8. Copy `output.vlpose` to the PC and use **File → Import → Vlender Pose (.vlpose)** in Blender. Review the pose and save a new `.blend` file.
 

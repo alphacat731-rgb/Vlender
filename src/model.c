@@ -324,12 +324,19 @@ int vl_model_load_project(VLModel *model, const char *path) {
     FILE *file;
     char line[1024];
     int header_seen = 0;
-    VLModel candidate;
+    VLModel *candidate;
     if (!model || !path) return 0;
     file = fopen(path, "rb");
     if (!file) return 0;
 
-    vl_model_init(&candidate);
+    /* VLModel contains the 256-entry armature. Allocate the transactional
+       candidate on the heap instead of consuming a large Vita thread stack. */
+    candidate = (VLModel *)malloc(sizeof(*candidate));
+    if (!candidate) {
+        fclose(file);
+        return 0;
+    }
+    vl_model_init(candidate);
     while (fgets(line, sizeof(line), file)) {
         char *tokens[40];
         int count;
@@ -339,38 +346,48 @@ int vl_model_load_project(VLModel *model, const char *path) {
             int ch;
             while ((ch = fgetc(file)) != '\n' && ch != EOF) { }
             fclose(file);
-            vl_model_free(&candidate);
+            vl_model_free(candidate);
+            free(candidate);
             return 0;
         }
         while (*trim == ' ' || *trim == '\t') ++trim;
         if (*trim == '\0' || *trim == '\n' || *trim == '#') continue;
         count = split_tokens(trim, tokens, 40);
-        if (count == 0) continue;
+        if (count == 0 || count > 40) {
+            fclose(file);
+            vl_model_free(candidate);
+            free(candidate);
+            return 0;
+        }
         if (strcmp(tokens[0], "VLENDER_MESH") == 0) {
             if (header_seen || count != 2 || strcmp(tokens[1], "1") != 0) {
                 fclose(file);
-                vl_model_free(&candidate);
+                vl_model_free(candidate);
+                free(candidate);
                 return 0;
             }
             header_seen = 1;
         } else if (strcmp(tokens[0], "T") == 0) {
             if (!header_seen || count != 2 || !tokens[1][0]) {
                 fclose(file);
-                vl_model_free(&candidate);
+                vl_model_free(candidate);
+                free(candidate);
                 return 0;
             }
-            snprintf(candidate.texture_name, sizeof(candidate.texture_name),
+            snprintf(candidate->texture_name, sizeof(candidate->texture_name),
                      "%s", tokens[1]);
         } else if (strcmp(tokens[0], "B") == 0) {
-            if (!header_seen || !parse_bone(&candidate, tokens, count)) {
+            if (!header_seen || !parse_bone(candidate, tokens, count)) {
                 fclose(file);
-                vl_model_free(&candidate);
+                vl_model_free(candidate);
+                free(candidate);
                 return 0;
             }
         } else if (strcmp(tokens[0], "V") == 0) {
-            if (!header_seen || !parse_vertex(&candidate, tokens, count)) {
+            if (!header_seen || !parse_vertex(candidate, tokens, count)) {
                 fclose(file);
-                vl_model_free(&candidate);
+                vl_model_free(candidate);
+                free(candidate);
                 return 0;
             }
         }
@@ -378,22 +395,25 @@ int vl_model_load_project(VLModel *model, const char *path) {
 
     if (ferror(file)) {
         fclose(file);
-        vl_model_free(&candidate);
+        vl_model_free(candidate);
+        free(candidate);
         return 0;
     }
     fclose(file);
 
-    if (!header_seen || candidate.vertex_count < 3 ||
-        candidate.vertex_count % 3 != 0 ||
-        !validate_bone_hierarchy(&candidate)) {
-        vl_model_free(&candidate);
+    if (!header_seen || candidate->vertex_count < 3 ||
+        candidate->vertex_count % 3 != 0 ||
+        !validate_bone_hierarchy(candidate)) {
+        vl_model_free(candidate);
+        free(candidate);
         return 0;
     }
 
-    candidate.loaded = 1;
-    vl_model_update_skin(&candidate);
+    candidate->loaded = 1;
+    vl_model_update_skin(candidate);
     vl_model_free(model);
-    *model = candidate;
+    *model = *candidate;
+    free(candidate);
     return 1;
 }
 
