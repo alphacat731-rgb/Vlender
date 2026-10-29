@@ -539,8 +539,15 @@ class IMPORT_SCENE_OT_vlender_animation(bpy.types.Operator, ImportHelper):
             return {"CANCELLED"}
 
         action = bpy.data.actions.new("Vlender Animation")
-        armature.animation_data_create()
-        armature.animation_data.action = action
+        animation_data = armature.animation_data_create()
+        # Blender 4.4+ uses slotted Actions. Assign a slot explicitly so the
+        # newly imported F-curves are guaranteed to drive this armature.
+        if hasattr(action, "slots") and hasattr(animation_data, "action_slot"):
+            slot = action.slots.new(armature.id_type, armature.name)
+            animation_data.action = action
+            animation_data.action_slot = slot
+        else:
+            animation_data.action = action
 
         applied_frames = 0
         applied_bones = 0
