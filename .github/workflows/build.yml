@@ -26,6 +26,9 @@ jobs:
           test -f "$VITASDK/share/vita.toolchain.cmake"
           command -v arm-vita-eabi-gcc
 
+      - name: Check Blender add-on syntax
+        run: python3 -m py_compile blender_addon/vlender_bridge.py
+
       - name: Configure
         run: >
           cmake -S . -B build
