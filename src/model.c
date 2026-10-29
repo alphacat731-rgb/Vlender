@@ -393,7 +393,13 @@ static void update_bone_pose(VLModel *model, int index, unsigned char *state) {
     float basis[16];
     if (state[index] == 2) return;
     if (state[index] == 1) {
-        bone->parent = -1;
+        /* Defensive cycle fallback. Valid projects reject cycles at load time;
+           never rewrite a bone's parent silently during pose evaluation. */
+        mat_from_trs(basis, bone->basis_location, bone->basis_rotation, bone->basis_scale);
+        mat_mul(bone->pose, bone->rest, basis);
+        mat_mul(bone->skin, bone->pose, bone->inv_rest);
+        state[index] = 2;
+        return;
     }
     state[index] = 1;
 
@@ -474,40 +480,90 @@ void vl_model_update_skin(VLModel *model) {
 int vl_model_load_pose(VLModel *model, const char *path) {
     FILE *file;
     char line[512];
-    int header_seen = 0, applied = 0;
-    if (!model || !path) return 0;
+    int header_seen = 0, applied = 0, failed = 0;
+    float old_trs[VLENDER_MAX_BONES][9];
+    int i, axis;
+    if (!model || !path || !model->loaded) return 0;
     file = fopen(path, "rb");
     if (!file) return 0;
+
+    for (i = 0; i < model->bone_count; ++i) {
+        for (axis = 0; axis < 3; ++axis) {
+            old_trs[i][axis] = model->bones[i].basis_rotation[axis];
+            old_trs[i][3 + axis] = model->bones[i].basis_location[axis];
+            old_trs[i][6 + axis] = model->bones[i].basis_scale[axis];
+        }
+    }
+
     while (fgets(line, sizeof(line), file)) {
         char *tokens[16];
         int count;
         char *trim = line;
-        while (*trim == ' ' || *trim == '\t') ++trim;
-        if (*trim == '\0' || *trim == '\n' || *trim == '#') continue;
+        size_t length = strlen(line);
+        if (length == sizeof(line) - 1 && line[length - 1] != '\\n') {
+            int ch;
+            while ((ch = fgetc(file)) != '\\n' && ch != EOF) { }
+            failed = 1;
+            break;
+        }
+        while (*trim == ' ' || *trim == '\\t') ++trim;
+        if (*trim == '\\0' || *trim == '\\n' || *trim == '#') continue;
         count = split_tokens(trim, tokens, 16);
         if (!count) continue;
+
         if (strcmp(tokens[0], "VLENDER_POSE") == 0) {
-            header_seen = count >= 2 && strcmp(tokens[1], "1") == 0;
-            if (!header_seen) break;
+            if (header_seen || count != 2 || strcmp(tokens[1], "1") != 0) {
+                failed = 1;
+                break;
+            }
+            header_seen = 1;
             continue;
         }
-        if (strcmp(tokens[0], "B") == 0 && count == 11 && header_seen) {
+
+        if (strcmp(tokens[0], "B") == 0) {
             char name[VLENDER_NAME_MAX];
             int bone_id;
+            if (!header_seen || count != 11) {
+                failed = 1;
+                break;
+            }
+            for (i = 2; i < 11; ++i) {
+                if (!valid_float_token(tokens[i])) {
+                    failed = 1;
+                    break;
+                }
+            }
+            if (failed) break;
             decode_name(tokens[1], name, sizeof(name));
             bone_id = vl_model_find_bone(model, name);
             if (bone_id >= 0) {
                 VLBone *bone = &model->bones[bone_id];
-                int i;
-                for (i = 0; i < 3; ++i) bone->basis_rotation[i] = token_float(tokens, 2 + i);
-                for (i = 0; i < 3; ++i) bone->basis_location[i] = token_float(tokens, 5 + i);
-                for (i = 0; i < 3; ++i) bone->basis_scale[i] = token_float(tokens, 8 + i);
+                for (axis = 0; axis < 3; ++axis)
+                    bone->basis_rotation[axis] = token_float(tokens, 2 + axis);
+                for (axis = 0; axis < 3; ++axis)
+                    bone->basis_location[axis] = token_float(tokens, 5 + axis);
+                for (axis = 0; axis < 3; ++axis)
+                    bone->basis_scale[axis] = token_float(tokens, 8 + axis);
                 ++applied;
             }
         }
     }
+    if (ferror(file)) failed = 1;
     fclose(file);
-    if (applied > 0) vl_model_update_skin(model);
+
+    if (failed || !header_seen || applied == 0) {
+        for (i = 0; i < model->bone_count; ++i) {
+            for (axis = 0; axis < 3; ++axis) {
+                model->bones[i].basis_rotation[axis] = old_trs[i][axis];
+                model->bones[i].basis_location[axis] = old_trs[i][3 + axis];
+                model->bones[i].basis_scale[axis] = old_trs[i][6 + axis];
+            }
+        }
+        vl_model_update_skin(model);
+        return 0;
+    }
+
+    vl_model_update_skin(model);
     return applied;
 }
 
