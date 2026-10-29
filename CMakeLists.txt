@@ -33,7 +33,7 @@ target_compile_options(Vlender PRIVATE
     -fno-lto
 )
 
-target_link_options(Vlender PRIVATE -Wl,-q)
+target_link_options(Vlender PRIVATE -Wl,-q -fno-lto)
 
 target_link_libraries(Vlender PRIVATE
     vita2d
