@@ -13,6 +13,7 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - Orbit the camera by dragging in the viewport or using the left stick; the right stick adjusts zoom.
 - Load and save ```.vlpose``` files.
 - Generate an app icon and LiveArea art, with GitHub Actions inputs to choose custom PNG files and the displayed app name.
+- Use an offline set of built-in Material-style vector icons for the toolbar and action buttons; no online font fetch is required.
 
 ### Current constraints
 

@@ -171,6 +171,173 @@ static void button2d(float x, float y, float w, float h, const char *label, int 
                   active ? 0.55f : 0.86f,active ? 1.0f : 0.89f,active ? 0.47f : 0.91f,label);
 }
 
+/* Compact, local Material-style vector symbols. All icon geometry is built in,
+   so the Vita never needs to load a font or connect to the internet. */
+enum {
+    ICON_SELECT = 0, ICON_MOVE, ICON_ROTATE, ICON_SCALE,
+    ICON_LAYOUT, ICON_POSE, ICON_OBJECT, ICON_OPEN,
+    ICON_LOAD, ICON_SAVE, ICON_MODE, ICON_MINUS,
+    ICON_PLUS, ICON_RESET
+};
+
+static void icon_line(float ox, float oy, float s,
+                      float ax, float ay, float bx, float by,
+                      float r, float g, float b) {
+    line2d(ox + ax*s, oy + ay*s, ox + bx*s, oy + by*s, r, g, b);
+}
+
+static void icon_rect(float ox, float oy, float s,
+                      float x, float y, float w, float h,
+                      float r, float g, float b) {
+    icon_line(ox,oy,s,x,y,x+w,y,r,g,b);
+    icon_line(ox,oy,s,x+w,y,x+w,y+h,r,g,b);
+    icon_line(ox,oy,s,x+w,y+h,x,y+h,r,g,b);
+    icon_line(ox,oy,s,x,y+h,x,y,r,g,b);
+}
+
+static void icon_circle(float ox, float oy, float s,
+                        float cx, float cy, float radius,
+                        float r, float g, float b) {
+    int i;
+    set_color(r,g,b);
+    glBegin(GL_LINE_LOOP);
+    for (i = 0; i < 20; ++i) {
+        float a = (float)i * 6.28318530718f / 20.0f;
+        glVertex2f(ox + (cx + cosf(a)*radius)*s,
+                   oy + (cy + sinf(a)*radius)*s);
+    }
+    glEnd();
+}
+
+static void draw_icon2d(int icon, float x, float y, float size,
+                        float r, float g, float b) {
+    float s = size / 24.0f;
+    switch (icon) {
+        case ICON_SELECT:
+            icon_line(x,y,s,5,3,5,20,r,g,b);
+            icon_line(x,y,s,5,3,19,14,r,g,b);
+            icon_line(x,y,s,19,14,13,15,r,g,b);
+            icon_line(x,y,s,13,15,16,21,r,g,b);
+            icon_line(x,y,s,16,21,13,22,r,g,b);
+            icon_line(x,y,s,13,22,10,16,r,g,b);
+            icon_line(x,y,s,10,16,5,20,r,g,b);
+            break;
+        case ICON_MOVE:
+            icon_line(x,y,s,12,4,12,20,r,g,b);
+            icon_line(x,y,s,4,12,20,12,r,g,b);
+            icon_line(x,y,s,12,4,8,8,r,g,b);
+            icon_line(x,y,s,12,4,16,8,r,g,b);
+            icon_line(x,y,s,12,20,8,16,r,g,b);
+            icon_line(x,y,s,12,20,16,16,r,g,b);
+            icon_line(x,y,s,4,12,8,8,r,g,b);
+            icon_line(x,y,s,4,12,8,16,r,g,b);
+            icon_line(x,y,s,20,12,16,8,r,g,b);
+            icon_line(x,y,s,20,12,16,16,r,g,b);
+            break;
+        case ICON_ROTATE:
+            icon_circle(x,y,s,12,12,7.5f,r,g,b);
+            icon_line(x,y,s,15,3.8f,20,4.5f,r,g,b);
+            icon_line(x,y,s,20,4.5f,19.1f,9.3f,r,g,b);
+            break;
+        case ICON_SCALE:
+            icon_line(x,y,s,6,18,18,6,r,g,b);
+            icon_line(x,y,s,6,18,6,12,r,g,b);
+            icon_line(x,y,s,6,18,12,18,r,g,b);
+            icon_line(x,y,s,18,6,12,6,r,g,b);
+            icon_line(x,y,s,18,6,18,12,r,g,b);
+            icon_line(x,y,s,5,5,9,5,r,g,b);
+            icon_line(x,y,s,5,5,5,9,r,g,b);
+            icon_line(x,y,s,19,19,15,19,r,g,b);
+            icon_line(x,y,s,19,19,19,15,r,g,b);
+            break;
+        case ICON_LAYOUT:
+            icon_rect(x,y,s,3,3,18,18,r,g,b);
+            icon_line(x,y,s,12,3,12,21,r,g,b);
+            icon_line(x,y,s,3,12,21,12,r,g,b);
+            break;
+        case ICON_POSE:
+            icon_circle(x,y,s,12,4,2.0f,r,g,b);
+            icon_circle(x,y,s,12,10,1.7f,r,g,b);
+            icon_circle(x,y,s,6,15,1.5f,r,g,b);
+            icon_circle(x,y,s,18,15,1.5f,r,g,b);
+            icon_circle(x,y,s,6,21,1.3f,r,g,b);
+            icon_circle(x,y,s,18,21,1.3f,r,g,b);
+            icon_line(x,y,s,12,6,12,10,r,g,b);
+            icon_line(x,y,s,12,10,6,15,r,g,b);
+            icon_line(x,y,s,12,10,18,15,r,g,b);
+            icon_line(x,y,s,6,15,6,21,r,g,b);
+            icon_line(x,y,s,18,15,18,21,r,g,b);
+            break;
+        case ICON_OBJECT:
+            icon_line(x,y,s,12,3,21,8,r,g,b);
+            icon_line(x,y,s,21,8,12,13,r,g,b);
+            icon_line(x,y,s,12,13,3,8,r,g,b);
+            icon_line(x,y,s,3,8,12,3,r,g,b);
+            icon_line(x,y,s,3,8,3,18,r,g,b);
+            icon_line(x,y,s,3,18,12,22,r,g,b);
+            icon_line(x,y,s,12,22,21,18,r,g,b);
+            icon_line(x,y,s,21,18,21,8,r,g,b);
+            icon_line(x,y,s,12,13,12,22,r,g,b);
+            break;
+        case ICON_OPEN:
+            icon_line(x,y,s,3,8,9,8,r,g,b);
+            icon_line(x,y,s,9,8,11,10,r,g,b);
+            icon_line(x,y,s,11,10,21,10,r,g,b);
+            icon_line(x,y,s,21,10,19,20,r,g,b);
+            icon_line(x,y,s,19,20,3,20,r,g,b);
+            icon_line(x,y,s,3,20,3,8,r,g,b);
+            icon_line(x,y,s,3,8,3,5,r,g,b);
+            icon_line(x,y,s,3,5,9,5,r,g,b);
+            icon_line(x,y,s,9,5,11,8,r,g,b);
+            icon_line(x,y,s,11,8,20,8,r,g,b);
+            break;
+        case ICON_LOAD:
+            icon_line(x,y,s,12,3,12,15,r,g,b);
+            icon_line(x,y,s,12,15,7,10,r,g,b);
+            icon_line(x,y,s,12,15,17,10,r,g,b);
+            icon_line(x,y,s,4,16,4,21,r,g,b);
+            icon_line(x,y,s,4,21,20,21,r,g,b);
+            icon_line(x,y,s,20,21,20,16,r,g,b);
+            break;
+        case ICON_SAVE:
+            icon_rect(x,y,s,4,3,16,18,r,g,b);
+            icon_rect(x,y,s,8,3,8,6,r,g,b);
+            icon_rect(x,y,s,7,13,10,8,r,g,b);
+            icon_line(x,y,s,16,4,16,8,r,g,b);
+            break;
+        case ICON_MODE:
+            icon_line(x,y,s,4,7,20,7,r,g,b);
+            icon_line(x,y,s,4,17,20,17,r,g,b);
+            icon_circle(x,y,s,9,7,2.5f,r,g,b);
+            icon_circle(x,y,s,15,17,2.5f,r,g,b);
+            break;
+        case ICON_MINUS:
+            icon_line(x,y,s,5,12,19,12,r,g,b);
+            break;
+        case ICON_PLUS:
+            icon_line(x,y,s,5,12,19,12,r,g,b);
+            icon_line(x,y,s,12,5,12,19,r,g,b);
+            break;
+        case ICON_RESET:
+            icon_circle(x,y,s,12,12,7.5f,r,g,b);
+            icon_line(x,y,s,12,3,18,4,r,g,b);
+            icon_line(x,y,s,18,4,17,9,r,g,b);
+            break;
+        default:
+            break;
+    }
+}
+
+static void button_icon2d(float x, float y, float w, float h,
+                          int icon, int active) {
+    float size = fminf(w,h) - 8.0f;
+    button2d(x,y,w,h," ",active);
+    draw_icon2d(icon,x + (w-size)*0.5f,y + (h-size)*0.5f,size,
+                active ? 0.55f : 0.86f,
+                active ? 1.0f : 0.89f,
+                active ? 0.47f : 0.91f);
+}
+
 static void begin_2d(void) {
     glViewport(0, 0, SCREEN_W, SCREEN_H);
     glMatrixMode(GL_PROJECTION);
@@ -641,10 +808,10 @@ static void draw_properties(void) {
     if (g_transform_tool == 0) {
         text2d(696,300,1.0f,0.55f,0.96f,0.48f,"SELECT TOOL");
         text2d(696,321,0.9f,0.52f,0.57f,0.62f,"TAP OUTLINER OR BONE");
-        button2d(694,382,48,24,"-5",0);
-        button2d(748,382,48,24,"+5",0);
-        button2d(802,382,66,24,"RESET",0);
-        button2d(876,382,58,24,"POSE",g_pose_mode);
+        button_icon2d(694,382,48,24,ICON_MINUS,0);
+        button_icon2d(748,382,48,24,ICON_PLUS,0);
+        button_icon2d(802,382,66,24,ICON_RESET,0);
+        button_icon2d(876,382,58,24,ICON_POSE,g_pose_mode);
         return;
     }
     value_label = g_transform_tool == 1 ? "LOC" : (g_transform_tool == 2 ? "ROT" : "SCALE");
@@ -678,19 +845,21 @@ static void draw_properties(void) {
         text2d(696,365,0.9f,0.52f,0.57f,0.62f,"0.1");
         text2d(904,365,0.9f,0.52f,0.57f,0.62f,"3.0");
     }
-    button2d(694,382,48,24,"-5",0);
-    button2d(748,382,48,24,"+5",0);
-    button2d(802,382,66,24,"RESET",0);
-    button2d(876,382,58,24,"POSE",g_pose_mode);
+    button_icon2d(694,382,48,24,ICON_MINUS,0);
+    button_icon2d(748,382,48,24,ICON_PLUS,0);
+    button_icon2d(802,382,66,24,ICON_RESET,0);
+    button_icon2d(876,382,58,24,ICON_POSE,g_pose_mode);
 }
 
 static void draw_toolbar(void) {
-    button2d(4,62,32,32,"SEL",g_transform_tool==0);
-    button2d(4,101,32,32,"MOV",g_transform_tool==1);
-    button2d(4,140,32,32,"ROT",g_transform_tool==2);
-    button2d(4,179,32,32,"SCL",g_transform_tool==3);
-    text2d(8,238,0.9f,0.46f,0.52f,0.58f,"3D");
-    text2d(8,252,0.9f,0.46f,0.52f,0.58f,"VIEW");
+    button_icon2d(4,62,32,32,ICON_SELECT,g_transform_tool==0);
+    button_icon2d(4,101,32,32,ICON_MOVE,g_transform_tool==1);
+    button_icon2d(4,140,32,32,ICON_ROTATE,g_transform_tool==2);
+    button_icon2d(4,179,32,32,ICON_SCALE,g_transform_tool==3);
+    /* Tiny local axis/view glyph in place of the old two-line text label. */
+    icon_line(7,238,0.72f,5,11,19,11,0.46f,0.52f,0.58f);
+    icon_line(7,238,0.72f,12,4,12,18,0.46f,0.52f,0.58f);
+    icon_line(7,238,0.72f,12,11,19,4,0.46f,0.52f,0.58f);
 }
 
 static void draw_timeline(void) {
@@ -718,13 +887,13 @@ static void draw_ui_overlay(void) {
     begin_2d();
     text2d(13,13,1.8f,0.53f,1.0f,0.45f,"VLENDER");
     text2d(126,18,1.0f,0.53f,0.59f,0.64f,"3D STUDIO");
-    button2d(250,9,80,28,"LAYOUT",1);
-    button2d(336,9,64,28,"POSE",g_pose_mode);
-    button2d(406,9,70,28,"OBJECT",!g_pose_mode);
-    button2d(691,9,56,28,"OPEN",0);
-    button2d(752,9,56,28,"LOAD",0);
-    button2d(813,9,56,28,"SAVE",0);
-    button2d(874,9,72,28,"MODE",g_pose_mode);
+    button_icon2d(250,9,34,28,ICON_LAYOUT,1);
+    button_icon2d(290,9,34,28,ICON_POSE,g_pose_mode);
+    button_icon2d(330,9,34,28,ICON_OBJECT,!g_pose_mode);
+    button_icon2d(791,9,34,28,ICON_OPEN,0);
+    button_icon2d(830,9,34,28,ICON_LOAD,0);
+    button_icon2d(869,9,34,28,ICON_SAVE,0);
+    button_icon2d(908,9,38,28,ICON_MODE,g_pose_mode);
     draw_toolbar();
     draw_outliner();
     draw_properties();
@@ -733,7 +902,8 @@ static void draw_ui_overlay(void) {
     text2d(12,528,0.9f,0.42f,0.49f,0.55f,"D-PAD SELECT / LEFT-RIGHT ROTATE / CROSS AXIS / START EXIT");
     text2d(692,528,0.9f,0.42f,0.49f,0.55f,"TOUCH: ORBIT / SELECT / ADJUST");
     text2d(56,61,0.95f,0.80f,0.84f,0.87f,g_model.loaded ? "MESH WORKSPACE" : "NO PROJECT LOADED");
-    if (!g_model.loaded) text2d(210,252,1.4f,0.88f,0.91f,0.92f,"3D VIEWPORT READY");
+    if (!g_model.loaded) centered_text(VIEW_X + VIEW_W*0.5f, VIEW_Y + VIEW_H*0.5f - 5.0f,
+                                              1.4f,0.88f,0.91f,0.92f,"3D VIEWPORT READY");
     /* Small XYZ viewport gizmo */
     line2d(621,75,651,75,0.90f,0.30f,0.30f);
     line2d(621,75,621,103,0.30f,0.90f,0.44f);
@@ -763,12 +933,12 @@ static void set_slider_from_x(int x) {
 
 static void on_touch_press(int x, int y) {
     if (y < 45) {
-        if (x >= 691 && x < 750) load_project();
-        else if (x >= 752 && x < 810) load_pose();
-        else if (x >= 813 && x < 870) save_pose();
-        else if (x >= 874 && x < 948) g_pose_mode = !g_pose_mode;
-        else if (x >= 336 && x < 400) g_pose_mode = 1;
-        else if (x >= 406 && x < 476) g_pose_mode = 0;
+        if (x >= 791 && x < 827) load_project();
+        else if (x >= 830 && x < 866) load_pose();
+        else if (x >= 869 && x < 905) save_pose();
+        else if (x >= 908 && x < 948) g_pose_mode = !g_pose_mode;
+        else if (x >= 290 && x < 324) g_pose_mode = 1;
+        else if (x >= 330 && x < 364) g_pose_mode = 0;
         return;
     }
     if (x >= 4 && x <= 38) {
