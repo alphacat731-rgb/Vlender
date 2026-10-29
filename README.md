@@ -17,6 +17,7 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - Undo/redo the last 24 bone-transform edits using the top-bar curved-arrow buttons. History follows the bone that was edited, even after selection changes.
 - Copy a selected bone's full location/rotation/scale transform and paste it onto another bone while in Pose mode; clipboard clears when a different project is loaded.
 - Use the File, Edit, Render, Window, and Help menus for their corresponding project, pose, undo/redo, transform clipboard, viewport display, mode, camera, and control-help actions.
+- Use the bottom timeline to scrub frames 1–80, insert/delete pose keyframes, play/pause interpolated bone motion, and save/load `.vlanim` animation files. The Blender add-on can sample an active action into `.vlanim` or import a Vlender animation as a new action.
 - Failed or malformed project loads preserve the currently loaded model; project parsing rejects non-finite values, invalid weights, incomplete triangles, duplicate bone names, and cyclic/out-of-range bone hierarchies.
 - Generate an app icon and LiveArea art, with GitHub Actions inputs to choose custom PNG files and the displayed app name.
 - Use an offline set of built-in Material-style vector icons for the toolbar and action buttons; no online font fetch is required.
@@ -27,7 +28,7 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - This alpha exports one mesh per project, with the mesh's active UV map and one base-colour image texture. Complex Blender shader graphs, multiple materials, modifiers, shape keys, cloth/physics, and animation playback are not evaluated by the Vita exporter.
 - The texture bridge writes a 24-bit BMP preview with a maximum edge of 512 pixels to fit the Vita memory/GPU budget.
 - The file format now accepts up to 256 bones and 15,000 triangles (45,000 triangle corners). Larger scenes still need decimation for Vita performance and memory use.
-- The viewport editor is Blender-inspired, not a pixel-perfect port of Blender's desktop UI. The timeline is visual scaffolding, not a keyframe animation editor yet.
+- The viewport editor is Blender-inspired, not a pixel-perfect port of Blender's desktop UI. Timeline animation is intentionally limited to 80 sampled frames and Euler TRS; it does not support constraints, NLA, shape keys, or Blender's full animation system.
 - vitaGL homebrew requires the compatible console-side shader compiler module (`libshacccg.suprx`) to be available on the Vita. The build does not bundle proprietary system files.
 
 ## Build locally
