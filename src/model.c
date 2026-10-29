@@ -264,7 +264,10 @@ static int parse_vertex(VLModel *model, char **tokens, int count) {
             !valid_float_token(tokens[11 + i * 2])) return 0;
         bone_id = token_int(tokens, 10 + i * 2);
         weight = token_float(tokens, 11 + i * 2);
-        if (weight < 0.0f) return 0;
+        /* The exporter normalizes each vertex's top-four weights before
+           writing. Reject out-of-range weights so hostile/corrupt files cannot
+           overflow the sum and silently collapse a vertex's skinning. */
+        if (weight < 0.0f || weight > 1.0001f) return 0;
         if (weight > 0.0f && (bone_id < 0 || bone_id >= model->bone_count)) return 0;
         if (weight > 0.0f) {
             vertex.bone[i] = bone_id;
