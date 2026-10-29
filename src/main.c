@@ -981,6 +981,7 @@ static int parse_animation_file(void) {
         char *trim = line;
         size_t length = strlen(line);
         char type[8];
+        char extra;
         if (length == sizeof(line)-1 && line[length-1] != '\n') {
             int ch;
             while ((ch=fgetc(file)) != '\n' && ch != EOF) { }
@@ -991,11 +992,11 @@ static int parse_animation_file(void) {
         if (sscanf(trim,"%7s",type) != 1) continue;
         if (strcmp(type,"VLENDER_ANIM") == 0) {
             int version = 0;
-            if (header_seen || sscanf(trim,"VLENDER_ANIM %d",&version) != 1 || version != 1) goto fail;
+            if (header_seen || sscanf(trim,"VLENDER_ANIM %d %c",&version,&extra) != 1 || version != 1) goto fail;
             header_seen = 1;
         } else if (strcmp(type,"F") == 0) {
             int frame;
-            if (!header_seen || sscanf(trim,"F %d",&frame) != 1 ||
+            if (!header_seen || sscanf(trim,"F %d %c",&frame,&extra) != 1 ||
                 frame < 1 || frame > VLENDER_TIMELINE_FRAMES) goto fail;
             current_frame = frame - 1;
             has_frame = 1;
@@ -1016,10 +1017,10 @@ static int parse_animation_file(void) {
             char name[VLENDER_NAME_MAX];
             int bone, n;
             if (!header_seen || current_frame < 0 ||
-                sscanf(trim,"B %239s %f %f %f %f %f %f %f %f %f",
+                sscanf(trim,"B %239s %f %f %f %f %f %f %f %f %f %c",
                        encoded,&values[0],&values[1],&values[2],
                        &values[3],&values[4],&values[5],
-                       &values[6],&values[7],&values[8]) != 10) goto fail;
+                       &values[6],&values[7],&values[8],&extra) != 10) goto fail;
             for (n = 0; n < 9; ++n) if (!isfinite(values[n])) goto fail;
             decode_bone_name(encoded,name,sizeof(name));
             bone = vl_model_find_bone(&g_model,name);
@@ -1028,6 +1029,8 @@ static int parse_animation_file(void) {
                 candidate[current_frame].valid = 1;
                 ++matched;
             }
+        } else {
+            goto fail;
         }
     }
     {
