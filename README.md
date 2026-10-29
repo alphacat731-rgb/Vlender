@@ -9,7 +9,7 @@
 - Native Vita UI built with VitaSDK and libvita2d.
 - Front touchscreen controls, plus D-pad / face-button shortcuts.
 - Bone list and Euler rotation controls, with small angle adjustments and reset.
-- Import/export of the simple `.vlpose` interchange format.
+- Import/export of the simple `.vlpose` interchange format (up to 128 bones in this Vita alpha).
 - Optional PNG/JPEG texture preview at `ux0:data/VLENDER/preview.png` or `preview.jpg`.
 - Blender 3.x/4.x/5.x add-on source for exporting/importing pose transforms and exporting a material-image preview.
 - GitHub Actions builds an installable `.vpk` artifact.
