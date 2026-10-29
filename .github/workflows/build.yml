@@ -26,6 +26,9 @@ jobs:
           test -f "$VITASDK/share/vita.toolchain.cmake"
           command -v arm-vita-eabi-gcc
 
+      - name: Ensure libvita2d is installed
+        run: vdpm install libvita2d
+
       - name: Check Blender add-on syntax
         run: python3 -m py_compile blender_addon/vlender_bridge.py
 
