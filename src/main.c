@@ -573,9 +573,14 @@ static void save_pose(void) {
 
 static void load_pose(void) {
     if (!g_model.loaded || vl_model_load_pose(&g_model, PATH_POSE_IN) <= 0) {
-        snprintf(g_status, sizeof(g_status), "%s", "NO MATCHING input.vlpose FOUND");
+        snprintf(g_status, sizeof(g_status), "%s", "POSE LOAD FAILED - CURRENT POSE KEPT");
     } else {
-        snprintf(g_status, sizeof(g_status), "%s", "POSE LOADED");
+        /* Loading a pose changes many bones at once; until bulk pose operations
+           have grouped history snapshots, clear per-transform history rather
+           than offering a misleading undo into an older state. */
+        g_undo_count = 0;
+        g_redo_count = 0;
+        snprintf(g_status, sizeof(g_status), "%s", "POSE LOADED - HISTORY CLEARED");
     }
 }
 
