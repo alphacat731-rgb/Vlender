@@ -1,10 +1,10 @@
 bl_info = {
     "name": "Vlender Project Bridge",
     "author": "Vlender contributors",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (3, 6, 0),
     "location": "File > Export, View3D > Sidebar > Vlender",
-    "description": "Export a textured, skinned mesh and armature for the Vlender PS Vita 3D editor",
+    "description": "Exchange meshes, poses, and sampled animations with the Vlender PS Vita 3D editor",
     "category": "Import-Export",
 }
 
@@ -579,6 +579,8 @@ class VIEW3D_PT_vlender_bridge(bpy.types.Panel):
         layout.operator("export_scene.vlender_project", icon="EXPORT")
         layout.operator("export_scene.vlender_pose", icon="EXPORT")
         layout.operator("import_scene.vlender_pose", icon="IMPORT")
+        layout.operator("export_scene.vlender_animation", icon="EXPORT")
+        layout.operator("import_scene.vlender_animation", icon="IMPORT")
         layout.separator()
         layout.label(text="One mesh + armature per project")
         layout.label(text="Texture maps are exported as BMP")
@@ -606,10 +608,26 @@ def menu_import_pose(self, context):
     )
 
 
+def menu_export_animation(self, context):
+    self.layout.operator(
+        EXPORT_SCENE_OT_vlender_animation.bl_idname,
+        text="Vlender Animation (.vlanim)",
+    )
+
+
+def menu_import_animation(self, context):
+    self.layout.operator(
+        IMPORT_SCENE_OT_vlender_animation.bl_idname,
+        text="Vlender Animation (.vlanim)",
+    )
+
+
 CLASSES = (
     EXPORT_SCENE_OT_vlender_project,
     EXPORT_SCENE_OT_vlender_pose,
     IMPORT_SCENE_OT_vlender_pose,
+    EXPORT_SCENE_OT_vlender_animation,
+    IMPORT_SCENE_OT_vlender_animation,
     VIEW3D_PT_vlender_bridge,
 )
 
@@ -619,13 +637,17 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_export.append(menu_export_project)
     bpy.types.TOPBAR_MT_file_export.append(menu_export_pose)
+    bpy.types.TOPBAR_MT_file_export.append(menu_export_animation)
     bpy.types.TOPBAR_MT_file_import.append(menu_import_pose)
+    bpy.types.TOPBAR_MT_file_import.append(menu_import_animation)
 
 
 def unregister():
     bpy.types.TOPBAR_MT_file_export.remove(menu_export_project)
     bpy.types.TOPBAR_MT_file_export.remove(menu_export_pose)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_export_animation)
     bpy.types.TOPBAR_MT_file_import.remove(menu_import_pose)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_import_animation)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 
