@@ -593,6 +593,7 @@ static int load_project(void) {
     g_bone_scroll = 0;
     g_undo_count = 0;
     g_redo_count = 0;
+    g_has_transform_clipboard = 0;
     g_camera_distance = fmaxf(2.8f, g_model.radius * 3.8f);
     g_pose_mode = 1;
     reload_texture();
@@ -723,9 +724,9 @@ static void redo_transform(void) {
 
 static void copy_selected_transform(void) {
     int i;
-    if (!g_model.loaded || g_selected_bone < 0 ||
+    if (!g_model.loaded || !g_pose_mode || g_selected_bone < 0 ||
         g_selected_bone >= g_model.bone_count) {
-        snprintf(g_status, sizeof(g_status), "%s", "COPY FAILED - NO BONE SELECTED");
+        snprintf(g_status, sizeof(g_status), "%s", "COPY FAILED - ENTER POSE MODE");
         return;
     }
     for (i = 0; i < 3; ++i) {
@@ -740,9 +741,9 @@ static void copy_selected_transform(void) {
 
 static void paste_selected_transform(void) {
     int i;
-    if (!g_model.loaded || g_selected_bone < 0 ||
+    if (!g_model.loaded || !g_pose_mode || g_selected_bone < 0 ||
         g_selected_bone >= g_model.bone_count || !g_has_transform_clipboard) {
-        snprintf(g_status, sizeof(g_status), "%s", "PASTE FAILED - COPY A BONE FIRST");
+        snprintf(g_status, sizeof(g_status), "%s", "PASTE FAILED - POSE MODE / COPY FIRST");
         return;
     }
     history_record_undo();
@@ -1228,7 +1229,7 @@ static void draw_ui_overlay(void) {
     button_icon2d(532,9,34,28,ICON_UNDO,g_undo_count>0);
     button_icon2d(572,9,34,28,ICON_REDO,g_redo_count>0);
     button_icon2d(612,9,34,28,ICON_COPY,g_model.loaded);
-    button_icon2d(652,9,34,28,ICON_PASTE,g_has_transform_clipboard);
+    button_icon2d(652,9,34,28,ICON_PASTE,g_has_transform_clipboard && g_model.loaded && g_pose_mode);
     button_icon2d(748,9,34,28,ICON_FIT,0);
     button_icon2d(788,9,34,28,ICON_OPEN,0);
     button_icon2d(828,9,34,28,ICON_LOAD,0);
