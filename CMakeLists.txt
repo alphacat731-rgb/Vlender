@@ -31,9 +31,10 @@ target_compile_options(Vlender PRIVATE
     -Wconversion
     -Wno-sign-conversion
     -fno-lto
+    -Os
 )
 
-target_link_options(Vlender PRIVATE -Wl,-q -fno-lto -Wl,-Tdata-segment=0x81100000)
+target_link_options(Vlender PRIVATE -Wl,-q -fno-lto)
 
 target_link_libraries(Vlender PRIVATE
     vita2d
