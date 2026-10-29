@@ -216,10 +216,15 @@ static int append_vertex(VLModel *model, const VLVertex *vertex) {
 static int parse_bone(VLModel *model, char **tokens, int count) {
     VLBone *bone;
     int i;
-    if (count != 34 || model->bone_count >= VLENDER_MAX_BONES) return 0;
+    if (count != 34 || model->bone_count >= VLENDER_MAX_BONES ||
+        !tokens[1][0] || !valid_int_token(tokens[2])) return 0;
+    for (i = 3; i < count; ++i) {
+        if (!valid_float_token(tokens[i])) return 0;
+    }
     bone = &model->bones[model->bone_count];
     memset(bone, 0, sizeof(*bone));
     decode_name(tokens[1], bone->name, sizeof(bone->name));
+    if (!bone->name[0] || vl_model_find_bone(model, bone->name) >= 0) return 0;
     bone->parent = token_int(tokens, 2);
     for (i = 0; i < 3; ++i) bone->head_local[i] = token_float(tokens, 3 + i);
     for (i = 0; i < 3; ++i) bone->tail_local[i] = token_float(tokens, 6 + i);
