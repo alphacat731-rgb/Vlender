@@ -30,6 +30,7 @@ typedef struct { float x, y, z; } Vec3;
 static VLModel g_model;
 static GLuint g_texture = 0;
 static int g_pose_mode = 1;
+static int g_transform_tool = 2; /* 0 select, 1 move, 2 rotate, 3 scale */
 static int g_selected_bone = 0;
 static int g_active_axis = 2;
 static int g_bone_scroll = 0;
@@ -37,7 +38,9 @@ static int g_previous_buttons = 0;
 static int g_touch_down = 0;
 static int g_drag_camera = 0;
 static int g_drag_slider = 0;
+static int g_touch_moved = 0;
 static int g_touch_x = 0, g_touch_y = 0;
+static int g_touch_start_x = 0, g_touch_start_y = 0;
 static float g_camera_azimuth = 32.0f;
 static float g_camera_elevation = -62.0f;
 static float g_camera_distance = 5.0f;
@@ -309,16 +312,64 @@ static void set_active_rotation(float degrees) {
     vl_model_update_skin(&g_model);
 }
 
-static void adjust_rotation(float degrees) {
-    set_active_rotation(active_rotation_degrees() + degrees);
+static float active_transform_value(void) {
+    if (!g_model.loaded || g_model.bone_count == 0) return 0.0f;
+    if (g_transform_tool == 1) return g_model.bones[g_selected_bone].basis_location[g_active_axis];
+    if (g_transform_tool == 2) return active_rotation_degrees();
+    if (g_transform_tool == 3) return g_model.bones[g_selected_bone].basis_scale[g_active_axis];
+    return 0.0f;
 }
 
-static void reset_selected_rotation(void) {
-    int i;
-    if (!g_model.loaded || g_model.bone_count == 0) return;
-    for (i = 0; i < 3; ++i) g_model.bones[g_selected_bone].basis_rotation[i] = 0.0f;
+static float active_transform_min(void) {
+    if (g_transform_tool == 1) return -2.0f;
+    if (g_transform_tool == 2) return -180.0f;
+    return 0.1f;
+}
+
+static float active_transform_max(void) {
+    if (g_transform_tool == 1) return 2.0f;
+    if (g_transform_tool == 2) return 180.0f;
+    return 3.0f;
+}
+
+static void set_active_transform(float value) {
+    if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0) return;
+    if (g_transform_tool == 1) {
+        g_model.bones[g_selected_bone].basis_location[g_active_axis] =
+            fmaxf(-2.0f, fminf(2.0f, value));
+    } else if (g_transform_tool == 2) {
+        set_active_rotation(value);
+        return;
+    } else if (g_transform_tool == 3) {
+        g_model.bones[g_selected_bone].basis_scale[g_active_axis] =
+            fmaxf(0.1f, fminf(3.0f, value));
+    }
     vl_model_update_skin(&g_model);
-    snprintf(g_status, sizeof(g_status), "%s", "SELECTED BONE ROTATION RESET");
+}
+
+static void adjust_rotation(float amount) {
+    if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0) return;
+    if (g_transform_tool == 1) {
+        set_active_transform(active_transform_value() + amount * 0.02f);
+    } else if (g_transform_tool == 2) {
+        set_active_transform(active_rotation_degrees() + amount);
+    } else if (g_transform_tool == 3) {
+        set_active_transform(active_transform_value() + amount * 0.02f);
+    }
+}
+
+static void reset_active_transform(void) {
+    int i;
+    if (!g_model.loaded || g_model.bone_count == 0 || g_transform_tool == 0) return;
+    if (g_transform_tool == 1) {
+        g_model.bones[g_selected_bone].basis_location[g_active_axis] = 0.0f;
+    } else if (g_transform_tool == 2) {
+        for (i = 0; i < 3; ++i) g_model.bones[g_selected_bone].basis_rotation[i] = 0.0f;
+    } else if (g_transform_tool == 3) {
+        g_model.bones[g_selected_bone].basis_scale[g_active_axis] = 1.0f;
+    }
+    vl_model_update_skin(&g_model);
+    snprintf(g_status, sizeof(g_status), "%s", "ACTIVE TRANSFORM RESET");
 }
 
 static void select_bone(int index) {
@@ -336,6 +387,68 @@ static Vec3 transform_point4(const float m[16], const float p[3]) {
     out.y = m[1]*p[0] + m[5]*p[1] + m[9]*p[2] + m[13];
     out.z = m[2]*p[0] + m[6]*p[1] + m[10]*p[2] + m[14];
     return out;
+}
+
+static int project_view_point(Vec3 point, float *screen_x, float *screen_y) {
+    float x = point.x - (g_model.loaded ? g_model.center[0] : 0.0f);
+    float y = point.y - (g_model.loaded ? g_model.center[1] : 0.0f);
+    float z = point.z - (g_model.loaded ? g_model.center[2] : 0.0f);
+    float azimuth = g_camera_azimuth * 0.01745329252f;
+    float elevation = g_camera_elevation * 0.01745329252f;
+    float ca = cosf(azimuth), sa = sinf(azimuth);
+    float ce = cosf(elevation), se = sinf(elevation);
+    float x1 = ca * x - sa * y;
+    float y1 = sa * x + ca * y;
+    float y2 = ce * y1 - se * z;
+    float z2 = se * y1 + ce * z - g_camera_distance;
+    float focal = (float)VIEW_H * 0.5f / tanf(22.5f * 0.01745329252f);
+    float depth = -z2;
+    if (depth < 0.05f) return 0;
+    *screen_x = (float)VIEW_X + (float)VIEW_W * 0.5f + focal * x1 / depth;
+    *screen_y = (float)VIEW_Y + (float)VIEW_H * 0.5f - focal * y2 / depth;
+    return *screen_x >= (float)(VIEW_X - 24) &&
+           *screen_x <= (float)(VIEW_X + VIEW_W + 24) &&
+           *screen_y >= (float)(VIEW_Y - 24) &&
+           *screen_y <= (float)(VIEW_Y + VIEW_H + 24);
+}
+
+static float touch_to_segment_distance(float px, float py,
+                                       float ax, float ay, float bx, float by) {
+    float dx = bx - ax, dy = by - ay;
+    float length_squared = dx * dx + dy * dy;
+    float t = 0.0f;
+    float qx, qy, ex, ey;
+    if (length_squared > 0.001f) t = ((px - ax) * dx + (py - ay) * dy) / length_squared;
+    t = fmaxf(0.0f, fminf(1.0f, t));
+    qx = ax + t * dx;
+    qy = ay + t * dy;
+    ex = px - qx;
+    ey = py - qy;
+    return sqrtf(ex * ex + ey * ey);
+}
+
+static int pick_bone_at(int x, int y) {
+    int i, found = -1;
+    float best_distance = 16.0f;
+    if (!g_model.loaded || !g_pose_mode || g_model.bone_count <= 0) return 0;
+    for (i = 0; i < g_model.bone_count; ++i) {
+        const VLBone *bone = &g_model.bones[i];
+        Vec3 head = transform_point4(bone->pose, bone->head_local);
+        Vec3 tail = transform_point4(bone->pose, bone->tail_local);
+        float hx, hy, tx, ty, distance;
+        if (!project_view_point(head, &hx, &hy) || !project_view_point(tail, &tx, &ty)) continue;
+        distance = touch_to_segment_distance((float)x, (float)y, hx, hy, tx, ty);
+        if (distance < best_distance) {
+            best_distance = distance;
+            found = i;
+        }
+    }
+    if (found >= 0) {
+        select_bone(found);
+        snprintf(g_status, sizeof(g_status), "%s", "BONE SELECTED IN 3D VIEWPORT");
+        return 1;
+    }
+    return 0;
 }
 
 static void grid_line(float x1, float y1, float z1, float x2, float y2, float z2,
@@ -512,6 +625,9 @@ static void draw_outliner(void) {
 static void draw_properties(void) {
     char text[72];
     int axis;
+    float low, high, factor;
+    const char *value_label;
+    const char *units;
     text2d(694,233,1.25f,0.90f,0.92f,0.94f,"TRANSFORM");
     if (!g_model.loaded || g_model.bone_count == 0) {
         text2d(694,257,1.0f,0.53f,0.59f,0.64f,"LOAD A VLMESH");
@@ -522,19 +638,46 @@ static void draw_properties(void) {
     button2d(694,263,54,24,"X",g_active_axis==0);
     button2d(755,263,54,24,"Y",g_active_axis==1);
     button2d(816,263,54,24,"Z",g_active_axis==2);
+    if (g_transform_tool == 0) {
+        text2d(696,300,1.0f,0.55f,0.96f,0.48f,"SELECT TOOL");
+        text2d(696,321,0.9f,0.52f,0.57f,0.62f,"TAP OUTLINER OR BONE");
+        button2d(694,382,48,24,"-5",0);
+        button2d(748,382,48,24,"+5",0);
+        button2d(802,382,66,24,"RESET",0);
+        button2d(876,382,58,24,"POSE",g_pose_mode);
+        return;
+    }
+    value_label = g_transform_tool == 1 ? "LOC" : (g_transform_tool == 2 ? "ROT" : "SCALE");
+    units = g_transform_tool == 1 ? "M" : (g_transform_tool == 2 ? "DEG" : "X");
     for (axis = 0; axis < 3; ++axis) {
         const char *axis_label = axis == 0 ? "X" : (axis == 1 ? "Y" : "Z");
-        snprintf(text,sizeof(text),"%s ROT  %7.2f DEG",axis_label,
-                 g_model.bones[g_selected_bone].basis_rotation[axis] * 57.295779513f);
-        text2d(696,295.0f + (float)axis * 19.0f,0.93f,
+        float value = g_transform_tool == 1
+            ? g_model.bones[g_selected_bone].basis_location[axis]
+            : (g_transform_tool == 2
+                ? g_model.bones[g_selected_bone].basis_rotation[axis] * 57.295779513f
+                : g_model.bones[g_selected_bone].basis_scale[axis]);
+        snprintf(text,sizeof(text),"%s %s %7.2f %s",axis_label,value_label,value,units);
+        text2d(696,295.0f + (float)axis * 19.0f,0.82f,
                axis==g_active_axis ? 0.56f : 0.75f,axis==g_active_axis ? 1.0f : 0.80f,
                axis==g_active_axis ? 0.48f : 0.84f,text);
     }
+    low = active_transform_min();
+    high = active_transform_max();
+    factor = (active_transform_value() - low) / (high - low);
+    factor = fmaxf(0.0f, fminf(1.0f, factor));
     rect2d(696,355,238,3,0.20f,0.24f,0.28f);
-    rect2d(696,355,238 * ((active_rotation_degrees()+180.0f)/360.0f),3,0.50f,0.94f,0.43f);
-    rect2d(696 + 238 * ((active_rotation_degrees()+180.0f)/360.0f)-3,349,6,15,0.85f,1.0f,0.79f);
-    text2d(696,365,0.9f,0.52f,0.57f,0.62f,"-180");
-    text2d(904,365,0.9f,0.52f,0.57f,0.62f,"180");
+    rect2d(696,355,238 * factor,3,0.50f,0.94f,0.43f);
+    rect2d(696 + 238 * factor - 3,349,6,15,0.85f,1.0f,0.79f);
+    if (g_transform_tool == 1) {
+        text2d(696,365,0.9f,0.52f,0.57f,0.62f,"-2.0");
+        text2d(902,365,0.9f,0.52f,0.57f,0.62f,"+2.0");
+    } else if (g_transform_tool == 2) {
+        text2d(696,365,0.9f,0.52f,0.57f,0.62f,"-180");
+        text2d(904,365,0.9f,0.52f,0.57f,0.62f,"180");
+    } else {
+        text2d(696,365,0.9f,0.52f,0.57f,0.62f,"0.1");
+        text2d(904,365,0.9f,0.52f,0.57f,0.62f,"3.0");
+    }
     button2d(694,382,48,24,"-5",0);
     button2d(748,382,48,24,"+5",0);
     button2d(802,382,66,24,"RESET",0);
@@ -542,10 +685,10 @@ static void draw_properties(void) {
 }
 
 static void draw_toolbar(void) {
-    button2d(4,62,32,32,"SEL",1);
-    button2d(4,101,32,32,"MOV",0);
-    button2d(4,140,32,32,"ROT",g_pose_mode);
-    button2d(4,179,32,32,"SCL",0);
+    button2d(4,62,32,32,"SEL",g_transform_tool==0);
+    button2d(4,101,32,32,"MOV",g_transform_tool==1);
+    button2d(4,140,32,32,"ROT",g_transform_tool==2);
+    button2d(4,179,32,32,"SCL",g_transform_tool==3);
     text2d(8,238,0.9f,0.46f,0.52f,0.58f,"3D");
     text2d(8,252,0.9f,0.46f,0.52f,0.58f,"VIEW");
 }
@@ -612,8 +755,10 @@ static void draw_frame(void) {
 
 static void set_slider_from_x(int x) {
     float factor = (float)(x - 696) / 238.0f;
+    float low = active_transform_min();
+    float high = active_transform_max();
     factor = fmaxf(0.0f, fminf(1.0f, factor));
-    set_active_rotation(-180.0f + factor * 360.0f);
+    set_active_transform(low + factor * (high - low));
 }
 
 static void on_touch_press(int x, int y) {
@@ -624,6 +769,13 @@ static void on_touch_press(int x, int y) {
         else if (x >= 874 && x < 948) g_pose_mode = !g_pose_mode;
         else if (x >= 336 && x < 400) g_pose_mode = 1;
         else if (x >= 406 && x < 476) g_pose_mode = 0;
+        return;
+    }
+    if (x >= 4 && x <= 38) {
+        if (y >= 62 && y <= 94) g_transform_tool = 0;
+        else if (y >= 101 && y <= 133) g_transform_tool = 1;
+        else if (y >= 140 && y <= 172) g_transform_tool = 2;
+        else if (y >= 179 && y <= 211) g_transform_tool = 3;
         return;
     }
     if (x >= 690 && x <= 952 && y >= 88 && y < 210) {
@@ -642,7 +794,7 @@ static void on_touch_press(int x, int y) {
     }
     if (x >= 694 && x < 744 && y >= 382 && y < 408) { adjust_rotation(-5.0f); return; }
     if (x >= 748 && x < 798 && y >= 382 && y < 408) { adjust_rotation(5.0f); return; }
-    if (x >= 802 && x < 870 && y >= 382 && y < 408) { reset_selected_rotation(); return; }
+    if (x >= 802 && x < 870 && y >= 382 && y < 408) { reset_active_transform(); return; }
     if (x >= 876 && x < 940 && y >= 382 && y < 408) { g_pose_mode = !g_pose_mode; return; }
     if (x >= 44 && x <= 676 && y >= 52 && y <= 418) {
         g_drag_camera = 1;
@@ -668,7 +820,7 @@ static int update_input(void) {
         if (pressed & SCE_CTRL_LEFT) adjust_rotation(-5.0f);
         if (pressed & SCE_CTRL_RIGHT) adjust_rotation(5.0f);
         if (pressed & SCE_CTRL_CROSS) g_active_axis = (g_active_axis + 1) % 3;
-        if (pressed & SCE_CTRL_CIRCLE) reset_selected_rotation();
+        if (pressed & SCE_CTRL_CIRCLE) reset_active_transform();
         if (pressed & SCE_CTRL_SQUARE) load_pose();
         if (pressed & SCE_CTRL_TRIANGLE) save_pose();
         if (pressed & SCE_CTRL_LTRIGGER) adjust_rotation(-1.0f);
@@ -689,8 +841,13 @@ static int update_input(void) {
     if (touch_is_down) {
         int x = (int)touch.report[0].x / 2;
         int y = (int)touch.report[0].y / 2;
-        if (!g_touch_down) on_touch_press(x,y);
-        else {
+        if (!g_touch_down) {
+            on_touch_press(x,y);
+            g_touch_start_x = x;
+            g_touch_start_y = y;
+            g_touch_moved = 0;
+        } else {
+            if (abs(x - g_touch_start_x) > 6 || abs(y - g_touch_start_y) > 6) g_touch_moved = 1;
             if (g_drag_camera) {
                 int dx = x - g_touch_x;
                 int dy = y - g_touch_y;
@@ -702,6 +859,11 @@ static int update_input(void) {
         g_touch_x = x;
         g_touch_y = y;
     } else {
+        if (g_drag_camera && !g_touch_moved &&
+            g_touch_start_x >= VIEW_X && g_touch_start_x <= VIEW_X + VIEW_W &&
+            g_touch_start_y >= VIEW_Y && g_touch_start_y <= VIEW_Y + VIEW_H) {
+            (void)pick_bone_at(g_touch_x, g_touch_y);
+        }
         g_drag_camera = 0;
         g_drag_slider = 0;
     }

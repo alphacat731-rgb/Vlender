@@ -6,10 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static float clampf(float x, float lo, float hi) {
-    return x < lo ? lo : (x > hi ? hi : x);
-}
-
 static void mat_identity(float m[16]) {
     memset(m, 0, sizeof(float) * 16);
     m[0] = m[5] = m[10] = m[15] = 1.0f;

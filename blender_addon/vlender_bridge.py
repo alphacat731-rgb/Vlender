@@ -11,6 +11,7 @@ bl_info = {
 import os
 import math
 import struct
+from array import array
 from urllib.parse import quote, unquote
 
 import bpy
@@ -98,56 +99,54 @@ def parse_pose_file(filepath):
 
 
 def write_bmp24(image, filepath, max_edge=MAX_TEXTURE_EDGE):
-    """Write a guaranteed uncompressed 24-bit BMP that the Vita loader supports."""
-    preview = image.copy()
-    try:
-        width, height = int(preview.size[0]), int(preview.size[1])
-        if width < 1 or height < 1:
-            raise ValueError("Texture has no pixel data")
-        factor = min(1.0, float(max_edge) / float(max(width, height)))
-        out_width = max(1, int(round(width * factor)))
-        out_height = max(1, int(round(height * factor)))
-        if out_width != width or out_height != height:
-            preview.scale(out_width, out_height)
-            width, height = out_width, out_height
+    """Write a guaranteed 24-bit BMP with Blender's bottom-left pixel origin preserved."""
+    width, height = int(image.size[0]), int(image.size[1])
+    if width < 1 or height < 1:
+        raise ValueError("Texture has no pixel data")
+    if max(width, height) > 4096:
+        raise ValueError("Texture exceeds 4096 px. Resize it in Blender before exporting to Vita.")
+    factor = min(1.0, float(max_edge) / float(max(width, height)))
+    out_width = max(1, int(round(width * factor)))
+    out_height = max(1, int(round(height * factor)))
 
-        rgba = list(preview.pixels[:])
-        if len(rgba) < width * height * 4:
-            raise ValueError("Texture pixel buffer is incomplete")
-        row_stride = (width * 3 + 3) & ~3
-        image_size = row_stride * height
-        file_size = 54 + image_size
-        header = bytearray()
-        header.extend(b"BM")
-        header.extend(struct.pack("<IHHI", file_size, 0, 0, 54))
-        header.extend(struct.pack("<IiiHHIIiiII",
-                                  40, width, height, 1, 24, 0, image_size,
-                                  2835, 2835, 0, 0))
+    # Blender's Image.pixels is a bottom-left-origin RGBA float buffer. Use a
+    # compact float array instead of a Python list, then sample down to 512 px.
+    rgba = array("f", [0.0]) * (width * height * 4)
+    image.pixels.foreach_get(rgba)
+    row_stride = (out_width * 3 + 3) & ~3
+    image_size = row_stride * out_height
+    file_size = 54 + image_size
+    header = bytearray()
+    header.extend(b"BM")
+    header.extend(struct.pack("<IHHI", file_size, 0, 0, 54))
+    header.extend(struct.pack("<IiiHHIIiiII",
+                              40, out_width, out_height, 1, 24, 0, image_size,
+                              2835, 2835, 0, 0))
 
-        def srgb(channel):
-            channel = max(0.0, min(1.0, float(channel)))
-            if channel <= 0.0031308:
-                result = channel * 12.92
-            else:
-                result = 1.055 * (channel ** (1.0 / 2.4)) - 0.055
-            return max(0, min(255, int(round(result * 255.0))))
+    def srgb(channel):
+        channel = max(0.0, min(1.0, float(channel)))
+        if channel <= 0.0031308:
+            result = channel * 12.92
+        else:
+            result = 1.055 * (channel ** (1.0 / 2.4)) - 0.055
+        return max(0, min(255, int(round(result * 255.0))))
 
-        with open(filepath, "wb") as stream:
-            stream.write(header)
-            for y in range(height - 1, -1, -1):
-                row = bytearray()
-                base = y * width * 4
-                for x in range(width):
-                    index = base + x * 4
-                    r = srgb(rgba[index])
-                    g = srgb(rgba[index + 1])
-                    b = srgb(rgba[index + 2])
-                    row.extend((b, g, r))
-                row.extend(b"\0" * (row_stride - len(row)))
-                stream.write(row)
-    finally:
-        bpy.data.images.remove(preview)
-
+    with open(filepath, "wb") as stream:
+        stream.write(header)
+        # BMP stores the bottom row first; Blender's pixel buffer also starts
+        # at the bottom row, so preserving ascending y avoids a vertical flip.
+        for out_y in range(out_height):
+            src_y = min(height - 1, (out_y * height) // out_height)
+            row = bytearray()
+            for out_x in range(out_width):
+                src_x = min(width - 1, (out_x * width) // out_width)
+                index = (src_y * width + src_x) * 4
+                r = srgb(rgba[index])
+                g = srgb(rgba[index + 1])
+                b = srgb(rgba[index + 2])
+                row.extend((b, g, r))
+            row.extend(b"\0" * (row_stride - len(row)))
+            stream.write(row)
 
 def find_material_image(mesh_obj):
     for slot in mesh_obj.material_slots:

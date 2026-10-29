@@ -9,7 +9,7 @@ It is **not a port of Blender itself**. The Vita app reads Vlender's compact `.v
 - Render a real 3D viewport using VitaGL/OpenGL and depth testing.
 - Display a textured, UV-mapped, armature-skinned mesh. The bridge exports one mesh, its active UV map, one base-colour image, and up to four bone weights per vertex.
 - Show a skeleton overlay and selectable bones in a right-side outliner.
-- Edit a selected bone's XYZ Euler rotation with touch controls, D-pad buttons, and shoulder-button fine steps.
+- Select bones in the outliner or by tapping the visible skeleton in the 3D viewport. The Select/Move/Rotate/Scale tools edit the corresponding bone transform using the touch slider, D-pad, and shoulder-button fine steps.
 - Orbit the camera by dragging in the viewport or using the left stick; the right stick adjusts zoom.
 - Load and save ```.vlpose``` files.
 - Generate an app icon and LiveArea art, with GitHub Actions inputs to choose custom PNG files and the displayed app name.
@@ -43,7 +43,7 @@ The package should be `build/Vlender.vpk`. GitHub Actions runs the same toolchai
 3. Choose **File → Export → Vlender 3D Project (.vlmesh)**. The add-on writes a `.vlmesh` project file and, when it finds a suitable image texture, a sibling `texture.bmp`.
 4. With VitaShell, create `ux0:data/VLENDER/` and copy the exported project to `ux0:data/VLENDER/model.vlmesh`. Copy the companion texture to `ux0:data/VLENDER/texture.bmp` if one was exported.
 5. Start Vlender. The initial viewport shows a demo cube when no project is loaded. Tap **OPEN** to reload the model from `ux0:data/VLENDER/model.vlmesh`, or copy the project before launching.
-6. Tap a bone in the **Outliner** to select it. Use the X/Y/Z buttons and rotation slider to edit its pose. Drag in the 3D viewport to orbit the camera. D-pad up/down selects bones; left/right rotates the active axis; Cross changes axis; Circle resets the selected bone; L/R make finer rotation steps.
+6. Tap a bone in the **Outliner** or directly in the 3D viewport to select it. Tap **SEL**, **MOV**, **ROT**, or **SCL** on the left toolbar to choose the transform tool. Use the X/Y/Z buttons and property slider to adjust the active axis. Drag in the 3D viewport to orbit the camera. D-pad up/down selects bones; left/right adjusts the active tool; Cross changes axis; Circle resets the active transform; L/R make finer adjustments.
 7. Tap **SAVE**, or press Triangle, to write `ux0:data/VLENDER/output.vlpose`.
 8. Copy `output.vlpose` to the PC and use **File → Import → Vlender Pose (.vlpose)** in Blender. Review the pose and save a new `.blend` file.
 
