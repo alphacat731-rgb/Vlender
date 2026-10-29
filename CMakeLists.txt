@@ -37,24 +37,24 @@ target_compile_options(Vlender PRIVATE
 target_link_options(Vlender PRIVATE -Wl,-q -fno-lto)
 target_link_libraries(Vlender PRIVATE
     vitaGL
+    stdc++
+    c
+    SceCommonDialog_stub
+    m
+    SceGxm_stub
     SceDisplay_stub
+    SceAppMgr_stub
     SceCtrl_stub
     SceTouch_stub
-    SceGxm_stub
     SceSysmodule_stub
     SceIofilemgr_stub
-    SceAppMgr_stub
     SceProcessmgr_stub
-    SceCommonDialog_stub
-    SceShaccCg_stub
-    SceShaccCgExt
-    SceKernelDmacMgr_stub
-    taihen_stub
-    vitashark
     mathneon
-    m
-    c
-    stdc++
+    vitashark
+    SceShaccCgExt
+    taihen_stub
+    SceShaccCg_stub
+    SceKernelDmacMgr_stub
 )
 
 vita_create_self(eboot.bin Vlender UNSAFE)
