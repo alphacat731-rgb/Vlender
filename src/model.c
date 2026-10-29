@@ -287,49 +287,104 @@ static int parse_vertex(VLModel *model, char **tokens, int count) {
     return append_vertex(model, &vertex);
 }
 
+static int validate_bone_visit(const VLModel *model, int index,
+                               unsigned char *state) {
+    int parent;
+    if (state[index] == 1) return 0;
+    if (state[index] == 2) return 1;
+    state[index] = 1;
+    parent = model->bones[index].parent;
+    if (parent < -1 || parent >= model->bone_count || parent == index) return 0;
+    if (parent >= 0 && !validate_bone_visit(model, parent, state)) return 0;
+    state[index] = 2;
+    return 1;
+}
+
+static int validate_bone_hierarchy(const VLModel *model) {
+    unsigned char state[VLENDER_MAX_BONES];
+    int i;
+    memset(state, 0, sizeof(state));
+    for (i = 0; i < model->bone_count; ++i) {
+        if (!validate_bone_visit(model, i, state)) return 0;
+    }
+    return 1;
+}
+
+/* Transactional load: a malformed/missing project never destroys the current model. */
 int vl_model_load_project(VLModel *model, const char *path) {
     FILE *file;
     char line[1024];
     int header_seen = 0;
+    VLModel candidate;
     if (!model || !path) return 0;
-    vl_model_free(model);
     file = fopen(path, "rb");
     if (!file) return 0;
 
+    vl_model_init(&candidate);
     while (fgets(line, sizeof(line), file)) {
         char *tokens[40];
         int count;
         char *trim = line;
-        while (*trim == ' ' || *trim == '\t') ++trim;
-        if (*trim == '\0' || *trim == '\n' || *trim == '#') continue;
+        size_t line_length = strlen(line);
+        if (line_length == sizeof(line) - 1 && line[line_length - 1] != '\\n') {
+            int ch;
+            while ((ch = fgetc(file)) != '\\n' && ch != EOF) { }
+            fclose(file);
+            vl_model_free(&candidate);
+            return 0;
+        }
+        while (*trim == ' ' || *trim == '\\t') ++trim;
+        if (*trim == '\\0' || *trim == '\\n' || *trim == '#') continue;
         count = split_tokens(trim, tokens, 40);
         if (count == 0) continue;
         if (strcmp(tokens[0], "VLENDER_MESH") == 0) {
-            header_seen = count >= 2 && strcmp(tokens[1], "1") == 0;
-            if (!header_seen) break;
-        } else if (strcmp(tokens[0], "T") == 0 && count >= 2) {
-            snprintf(model->texture_name, sizeof(model->texture_name), "%s", tokens[1]);
-        } else if (strcmp(tokens[0], "B") == 0) {
-            if (!header_seen || !parse_bone(model, tokens, count)) {
+            if (header_seen || count != 2 || strcmp(tokens[1], "1") != 0) {
                 fclose(file);
-                vl_model_free(model);
+                vl_model_free(&candidate);
+                return 0;
+            }
+            header_seen = 1;
+        } else if (strcmp(tokens[0], "T") == 0) {
+            if (!header_seen || count != 2 || !tokens[1][0]) {
+                fclose(file);
+                vl_model_free(&candidate);
+                return 0;
+            }
+            snprintf(candidate.texture_name, sizeof(candidate.texture_name),
+                     "%s", tokens[1]);
+        } else if (strcmp(tokens[0], "B") == 0) {
+            if (!header_seen || !parse_bone(&candidate, tokens, count)) {
+                fclose(file);
+                vl_model_free(&candidate);
                 return 0;
             }
         } else if (strcmp(tokens[0], "V") == 0) {
-            if (!header_seen || !parse_vertex(model, tokens, count)) {
+            if (!header_seen || !parse_vertex(&candidate, tokens, count)) {
                 fclose(file);
-                vl_model_free(model);
+                vl_model_free(&candidate);
                 return 0;
             }
         }
     }
-    fclose(file);
-    if (!header_seen || model->vertex_count < 3) {
-        vl_model_free(model);
+
+    if (ferror(file)) {
+        fclose(file);
+        vl_model_free(&candidate);
         return 0;
     }
-    model->loaded = 1;
-    vl_model_update_skin(model);
+    fclose(file);
+
+    if (!header_seen || candidate.vertex_count < 3 ||
+        candidate.vertex_count % 3 != 0 ||
+        !validate_bone_hierarchy(&candidate)) {
+        vl_model_free(&candidate);
+        return 0;
+    }
+
+    candidate.loaded = 1;
+    vl_model_update_skin(&candidate);
+    vl_model_free(model);
+    *model = candidate;
     return 1;
 }
 
