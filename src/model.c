@@ -1,6 +1,7 @@
 #include "model.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,11 +137,16 @@ static void encode_name(const char *src, char *dst, size_t capacity) {
 
 static int split_tokens(char *line, char **tokens, int max_tokens) {
     int count = 0;
-    char *saveptr = NULL;
-    char *token = strtok_r(line, " \t\r\n", &saveptr);
-    while (token && count < max_tokens) {
-        tokens[count++] = token;
-        token = strtok_r(NULL, " \t\r\n", &saveptr);
+    char *cursor = line;
+    while (*cursor) {
+        while (*cursor == ' ' || *cursor == '\t' ||
+               *cursor == '\r' || *cursor == '\n') ++cursor;
+        if (!*cursor) break;
+        if (count >= max_tokens) return max_tokens + 1;
+        tokens[count++] = cursor;
+        while (*cursor && *cursor != ' ' && *cursor != '\t' &&
+               *cursor != '\r' && *cursor != '\n') ++cursor;
+        if (*cursor) *cursor++ = '\0';
     }
     return count;
 }
